@@ -75,7 +75,20 @@ def analyze_relevance_with_ai(title, summary, keyword):
     if not client: return 50, "Mangler API-nøkkel"
     clean_title = clean_html(title)
     clean_summary = clean_html(summary)
-    prompt = f"Vurder sak for Telemarksavisa. Søkeord: '{keyword}'. Tittel: {clean_title}. Ingress: {clean_summary}. Score 0-100. Format: Score: [tall] Begrunnelse: [tekst]"
+    
+    # --- HER ER ENDRINGEN: STRENGERE INSTRUKS ---
+    prompt = f"""
+    Vurder sak for Telemarksavisa. Søkeord: '{keyword}'. 
+    Tittel: {clean_title}
+    Ingress: {clean_summary}
+    
+    VIKTIG: Begrunnelsen skal være ekstremt kort (maks 10-15 ord). Ikke analyser journalistikken, bare si hvorfor saken er relevant for Telemark.
+    
+    Format: 
+    Score: [tall 0-100] 
+    Begrunnelse: [Kort setning]
+    """
+    
     try:
         response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
         content = response.choices[0].message.content
@@ -87,7 +100,7 @@ def analyze_relevance_with_ai(title, summary, keyword):
 def fetch_and_filter_news(keywords):
     new_hits = 0
     total_checked = 0
-    status_box = st.sidebar.empty() # Boks for statusmeldinger
+    status_box = st.sidebar.empty()
     progress = st.sidebar.progress(0)
     
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
@@ -121,8 +134,8 @@ def fetch_and_filter_news(keywords):
             
         progress.progress((i+1)/len(RSS_SOURCES))
     
-    status_box.empty() # Fjerner teksten "Leser..." når den er ferdig
-    progress.empty()   # Fjerner progressbaren
+    status_box.empty() 
+    progress.empty()   
     return new_hits
 
 # --- 5. Hovedprogrammet ---
@@ -140,17 +153,13 @@ def main():
         auto_run = st.toggle("🔄 Autopilot")
         
         if auto_run:
-            # 1. KJØR SJEKK
             hits = fetch_and_filter_news(active_keywords)
             if hits: st.toast(f"Fant {hits} nye saker!", icon="🔥")
             
-            # 2. VIS VENTEMELDING (UTEN NEDTELLING SOM FYLLER OPP)
             next_run = datetime.now() + timedelta(minutes=10)
             time_str = next_run.strftime("%H:%M")
-            
             st.info(f"✅ Ferdig sjekket. \n💤 Sover til kl {time_str}")
             
-            # 3. SOV I BAKGRUNNEN (Sparer ressurser og unngår spam)
             time.sleep(600) 
             st.rerun()
             
@@ -166,53 +175,5 @@ def main():
         if st.button("🛠️ Test"):
             conn = sqlite3.connect(DB_FILE); c = conn.cursor()
             try:
-                c.execute("INSERT INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)", (f"test_{int(time.time())}", "Test-sak fra Skien", "http://test.no", "Ingress.", "TestKilde", "Nå", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Skien", 85, "Test", 'Ny'))
-                conn.commit()
-            except: pass
-            conn.close(); st.rerun()
-
-    st.title("🗞️ Nyhetsstrøm for Telemark")
-    
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
-    conn.close()
-
-    if not df.empty:
-        today = datetime.now().strftime("%Y-%m-%d")
-        todays_news = df[df['found_at'].str.contains(today)]
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Saker i dag", len(todays_news))
-        c2.metric("🔥 Høy relevans", len(todays_news[todays_news['ai_score'] > 70]))
-        c3.metric("Siste sjekk", datetime.now().strftime("%H:%M"))
-        st.divider()
-
-        tab1, tab2 = st.tabs(["🔥 Viktigste", "🗄️ Arkiv"])
-        
-        def render_grid(dataframe):
-            cols_per_row = 3
-            for i in range(0, len(dataframe), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for j in range(cols_per_row):
-                    if i + j < len(dataframe):
-                        row = dataframe.iloc[i + j]
-                        score = row['ai_score'] if row['ai_score'] else 0
-                        header_color = "red" if score > 70 else "orange" if score > 30 else "grey"
-                        
-                        with cols[j]:
-                            with st.container(border=True):
-                                st.markdown(f"**Score: :{header_color}[{score}]**")
-                                st.markdown(f"#### [{row['title']}]({row['link']})")
-                                st.info(f"🤖 {row['ai_reason']}")
-                                st.caption(f"📍 {row['matched_keyword']} | 📰 {row['source']}")
-                                st.caption(f"🕒 {row['found_at']}")
-
-        with tab1: render_grid(df[df['ai_score'] > 70])
-        with tab2: render_grid(df)
-    else:
-        st.info("Ingen saker funnet ennå. Autopilot kjører...")
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        st.error(f"En kritisk feil oppstod: {e}")
+                # Kortet ned teksten i testen også
+                c.execute("INSERT INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)", (f"test_{int(time.time())}", "Test-sak fra Skien", "http://test.no", "Ingress.", "TestKilde", "Nå", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Skien", 85, "Relevant for
