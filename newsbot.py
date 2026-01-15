@@ -136,7 +136,6 @@ def fetch_and_filter_news(keywords):
 
 # --- 5. Hovedprogrammet ---
 def main():
-    # START MED Å TEGNE SIDEN
     st.title("🗞️ Nyhetsstrøm for Telemark")
     init_db()
 
@@ -172,19 +171,16 @@ def main():
                 st.info("Ingen nye treff.")
 
         if st.button("🛠️ Test"):
+            # Enkel test-logikk uten kompliserte klasser
             try:
-                # Lager en enkel dummy-klasse for å unngå syntaksfeil
-                class DummyEntry:
-                    def __init__(self):
-                        self.link = f"http://test{int(time.time())}.no"
-                        self.title = "Test-sak"
-                        self.summary = "Kort ingress."
-                        self.published = "Nå"
+                class MockEntry:
+                    title = "Test-sak"
+                    link = f"http://test{int(time.time())}.no"
+                    summary = "Kort ingress."
+                    published = "Nå"
                 
-                # Opprett objektet og lagre
-                dummy = DummyEntry()
+                dummy = MockEntry()
                 save_article(dummy, "TestKilde", "Skien", 85, "Kort svar.")
-                
                 st.success("Test lagret!")
                 time.sleep(1)
                 st.rerun()
