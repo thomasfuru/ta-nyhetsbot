@@ -76,14 +76,13 @@ def analyze_relevance_with_ai(title, summary, keyword):
     clean_title = clean_html(title)
     clean_summary = clean_html(summary)
     
-    # --- HER ER ENDRINGEN: STRENGERE INSTRUKS ---
+    # --- STRENGERE INSTRUKS (Kort tekst) ---
     prompt = f"""
     Vurder sak for Telemarksavisa. Søkeord: '{keyword}'. 
     Tittel: {clean_title}
     Ingress: {clean_summary}
     
-    VIKTIG: Begrunnelsen skal være ekstremt kort (maks 10-15 ord). Ikke analyser journalistikken, bare si hvorfor saken er relevant for Telemark.
-    
+    VIKTIG: Begrunnelsen skal være ekstremt kort (maks 10-15 ord).
     Format: 
     Score: [tall 0-100] 
     Begrunnelse: [Kort setning]
@@ -175,5 +174,8 @@ def main():
         if st.button("🛠️ Test"):
             conn = sqlite3.connect(DB_FILE); c = conn.cursor()
             try:
-                # Kortet ned teksten i testen også
-                c.execute("INSERT INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)", (f"test_{int(time.time())}", "Test-sak fra Skien", "http://test.no", "Ingress.", "TestKilde", "Nå", datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Skien", 85, "Relevant for
+                # Fikset tekstlinjen her så den ikke brekker
+                tittel = "Test-sak fra Skien"
+                ingress = "Relevant for infrastruktur."
+                kilde = "TestKilde"
+                naa =
