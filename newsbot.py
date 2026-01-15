@@ -17,7 +17,7 @@ DB_FILE = "ta_nyhetsbot.db"
 try:
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except:
-    OPENAI_API_KEY = "" # La stå tom lokalt hvis du skal pushe til GitHub
+    OPENAI_API_KEY = "" 
 
 # Initialiser AI
 client = None
@@ -76,36 +76,24 @@ def analyze_relevance_with_ai(title, summary, keyword):
     clean_title = clean_html(title)
     clean_summary = clean_html(summary)
     
-    # --- STRENGERE INSTRUKS (Kort tekst) ---
-    prompt = f"""
-    Vurder sak for Telemarksavisa. Søkeord: '{keyword}'. 
-    Tittel: {clean_title}
-    Ingress: {clean_summary}
-    
-    VIKTIG: Begrunnelsen skal være ekstremt kort (maks 10-15 ord).
-    Format: 
-    Score: [tall 0-100] 
-    Begrunnelse: [Kort setning]
-    """
+    # KORT INSTRUKS TIL AI
+    prompt = f"Vurder sak for Telemarksavisa. Søkeord: '{keyword}'. Tittel: {clean_title}. Ingress: {clean_summary}. VIKTIG: Begrunnelsen skal være ekstremt kort (maks 10-15 ord). Format: Score: [tall] Begrunnelse: [tekst]"
     
     try:
         response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
         content = response.choices[0].message.content
         
-        # Henter ut score
         score = 0
         if "Score:" in content:
             score_part = content.split("Score:")[1].split("\n")[0]
             score = int(''.join(filter(str.isdigit, score_part)))
             
-        # Henter ut begrunnelse
         reason = "Ingen begrunnelse"
         if "Begrunnelse:" in content:
             reason = content.split("Begrunnelse:")[1].strip()
             
         return score, reason
-    except Exception as e:
-        # Hvis AI feiler, returner 0
+    except Exception:
         return 0, "AI feilet"
 
 def fetch_and_filter_news(keywords):
@@ -123,14 +111,12 @@ def fetch_and_filter_news(keywords):
             for entry in feed.entries:
                 total_checked += 1
                 
-                # --- EKSKLUDERINGS-FILTER ---
-                title_lower = entry.title.lower()
-                source_lower = feed.feed.get('title', '').lower()
-                link_lower = entry.link.lower()
-                
-                if "telemarksavisa" in title_lower or "telemarksavisa" in source_lower or "ta.no" in link_lower:
+                # EKSKLUDER TA
+                t = entry.title.lower()
+                s = feed.feed.get('title', '').lower()
+                l = entry.link.lower()
+                if "telemarksavisa" in t or "telemarksavisa" in s or "ta.no" in l:
                     continue 
-                # ----------------------------
 
                 raw_text = (entry.title + " " + getattr(entry, 'summary', '')).lower()
                 hit = next((k for k in keywords if k.lower() in raw_text), None)
@@ -142,7 +128,6 @@ def fetch_and_filter_news(keywords):
                         new_hits += 1
         except Exception: 
             continue
-            
         progress.progress((i+1)/len(RSS_SOURCES))
     
     status_box.empty() 
@@ -154,21 +139,4 @@ def main():
     init_db()
 
     with st.sidebar:
-        st.header("TA Monitor")
-        st.subheader("📍 Geofilter")
-        
-        user_input = st.text_area("Søkeord", value=", ".join(DEFAULT_KEYWORDS), height=150)
-        active_keywords = [k.strip() for k in user_input.split(",") if k.strip()]
-        st.divider()
-        
-        auto_run = st.toggle("🔄 Autopilot")
-        
-        if auto_run:
-            hits = fetch_and_filter_news(active_keywords)
-            if hits: st.toast(f"Fant {hits} nye saker!", icon="🔥")
-            
-            next_run = datetime.now() + timedelta(minutes=10)
-            time_str = next_run.strftime("%H:%M")
-            st.info(f"✅ Ferdig sjekket. \n💤 Sover til kl {time_str}")
-            
-            time.
+        st
