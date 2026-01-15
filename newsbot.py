@@ -136,7 +136,7 @@ def fetch_and_filter_news(keywords):
 
 # --- 5. Hovedprogrammet ---
 def main():
-    # START MED Å TEGNE SIDEN (Så du ser den med en gang)
+    # START MED Å TEGNE SIDEN
     st.title("🗞️ Nyhetsstrøm for Telemark")
     init_db()
 
@@ -173,7 +173,64 @@ def main():
 
         if st.button("🛠️ Test"):
             try:
-                # Oppretter dummy-data
-                tid = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                save_article(
-                    type('obj', (object,), {'link':f"http://test{int(time.time())}.no", 'title':"Test-sak", 'summary':"Ingress"}),
+                # Lager en enkel dummy-klasse for å unngå syntaksfeil
+                class DummyEntry:
+                    def __init__(self):
+                        self.link = f"http://test{int(time.time())}.no"
+                        self.title = "Test-sak"
+                        self.summary = "Kort ingress."
+                        self.published = "Nå"
+                
+                # Opprett objektet og lagre
+                dummy = DummyEntry()
+                save_article(dummy, "TestKilde", "Skien", 85, "Kort svar.")
+                
+                st.success("Test lagret!")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Feil: {e}")
+
+    # --- HOVEDVINDU (VISNING) ---
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
+    except Exception:
+        df = pd.DataFrame()
+
+    if not df.empty:
+        today = datetime.now().strftime("%Y-%m-%d")
+        todays_news = df[df['found_at'].str.contains(today)]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Saker i dag", len(todays_news))
+        c2.metric("🔥 Høy relevans", len(todays_news[todays_news['ai_score'] > 70]))
+        c3.metric("Siste sjekk", datetime.now().strftime("%H:%M"))
+        st.divider()
+
+        tab1, tab2 = st.tabs(["🔥 Viktigste", "🗄️ Arkiv"])
+        
+        def render_grid(dataframe):
+            cols_per_row = 3
+            for i in range(0, len(dataframe), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j in range(cols_per_row):
+                    if i + j < len(dataframe):
+                        row = dataframe.iloc[i + j]
+                        score = row['ai_score'] if row['ai_score'] else 0
+                        header_color = "red" if score > 70 else "orange" if score > 30 else "grey"
+                        
+                        with cols[j]:
+                            with st.container(border=True):
+                                st.markdown(f"**Score: :{header_color}[{score}]**")
+                                st.markdown(f"#### [{row['title']}]({row['link']})")
+                                st.info(f"🤖 {row['ai_reason']}")
+                                st.caption(f"📍 {row['matched_keyword']} | 📰 {row['source']}")
+                                st.caption(f"🕒 {row['found_at']}")
+
+        with tab1: render_grid(df[df['ai_score'] > 70])
+        with tab2: render_grid(df)
+    else:
+        st.info("Ingen saker funnet ennå. Trykk på '🔎 Søk manuelt' eller '🛠️ Test'.")
+
+if __name__ == "__main__":
+    main()
