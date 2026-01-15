@@ -10,6 +10,9 @@ import re
 # --- 1. Sette opp siden ---
 st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
 
+# Sjekk at vi lever (vises mens den laster)
+st.caption("Starter systemet...")
+
 # --- 2. Konfigurasjon ---
 DB_FILE = "ta_nyhetsbot.db"
 
@@ -139,4 +142,85 @@ def main():
     init_db()
 
     with st.sidebar:
-        st
+        st.header("TA Monitor")
+        st.subheader("📍 Geofilter")
+        
+        user_input = st.text_area("Søkeord", value=", ".join(DEFAULT_KEYWORDS), height=150)
+        active_keywords = [k.strip() for k in user_input.split(",") if k.strip()]
+        st.divider()
+        
+        auto_run = st.toggle("🔄 Autopilot")
+        
+        if auto_run:
+            hits = fetch_and_filter_news(active_keywords)
+            if hits: st.toast(f"Fant {hits} nye saker!", icon="🔥")
+            
+            next_run = datetime.now() + timedelta(minutes=10)
+            t_str = next_run.strftime("%H:%M")
+            st.info(f"✅ Ferdig. Sover til {t_str}")
+            
+            time.sleep(600) 
+            st.rerun()
+            
+        elif st.button("🔎 Søk manuelt", type="primary"):
+            hits = fetch_and_filter_news(active_keywords)
+            if hits > 0: 
+                st.success(f"Fant {hits} nye!")
+                time.sleep(1)
+                st.rerun()
+            else: 
+                st.info("Ingen nye treff.")
+
+        if st.button("🛠️ Test"):
+            conn = sqlite3.connect(DB_FILE); c = conn.cursor()
+            try:
+                tid = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                test_id = f"test_{int(time.time())}"
+                c.execute("INSERT INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)", 
+                          (test_id, "Test-sak fra Skien", "http://test.no", "Ingress.", "TestKilde", "Nå", tid, "Skien", 85, "Kort svar.", 'Ny'))
+                conn.commit()
+            except: pass
+            conn.close(); st.rerun()
+
+    st.title("🗞️ Nyhetsstrøm for Telemark")
+    
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
+    conn.close()
+
+    if not df.empty:
+        today = datetime.now().strftime("%Y-%m-%d")
+        todays_news = df[df['found_at'].str.contains(today)]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Saker i dag", len(todays_news))
+        c2.metric("🔥 Høy relevans", len(todays_news[todays_news['ai_score'] > 70]))
+        c3.metric("Siste sjekk", datetime.now().strftime("%H:%M"))
+        st.divider()
+
+        tab1, tab2 = st.tabs(["🔥 Viktigste", "🗄️ Arkiv"])
+        
+        def render_grid(dataframe):
+            cols_per_row = 3
+            for i in range(0, len(dataframe), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j in range(cols_per_row):
+                    if i + j < len(dataframe):
+                        row = dataframe.iloc[i + j]
+                        score = row['ai_score'] if row['ai_score'] else 0
+                        header_color = "red" if score > 70 else "orange" if score > 30 else "grey"
+                        
+                        with cols[j]:
+                            with st.container(border=True):
+                                st.markdown(f"**Score: :{header_color}[{score}]**")
+                                st.markdown(f"#### [{row['title']}]({row['link']})")
+                                st.info(f"🤖 {row['ai_reason']}")
+                                st.caption(f"📍 {row['matched_keyword']} | 📰 {row['source']}")
+                                st.caption(f"🕒 {row['found_at']}")
+
+        with tab1: render_grid(df[df['ai_score'] > 70])
+        with tab2: render_grid(df)
+    else:
+        st.info("Ingen saker funnet ennå. Autopilot kjører...")
+
+if __name__ == "__main__":
+    main()
