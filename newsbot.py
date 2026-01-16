@@ -14,7 +14,6 @@ st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
 # --- 2. Konfigurasjon ---
 DB_FILE = "ta_nyhetsbot.db"
 
-# Prøver å hente API-nøkkel
 try:
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except:
@@ -45,14 +44,11 @@ DEFAULT_KEYWORDS = [
 ]
 
 # --- 3. Tids-fikser (Norsk Tid) ---
-# Denne funksjonen prøver å bruke ZoneInfo for korrekt norsk tid.
-# Hvis det feiler (pga manglende filer), legger den bare på 1 time manuelt.
 def get_norway_time():
     try:
         from zoneinfo import ZoneInfo
         return datetime.now(ZoneInfo("Europe/Oslo"))
     except ImportError:
-        # Fallback: Legg til 1 time manuelt (Vintertid)
         return datetime.now() + timedelta(hours=1)
     except Exception:
         return datetime.now()
@@ -87,8 +83,6 @@ def save_article(entry, source, keyword, score, reason):
         summary = clean_html(getattr(entry, 'summary', ''))
         link = entry.link
         published = getattr(entry, 'published', 'Ukjent')
-        
-        # BRUKER NORSK TID HER
         found_at = get_norway_time().strftime("%Y-%m-%d %H:%M:%S")
 
         with sqlite3.connect(DB_FILE) as conn:
@@ -102,25 +96,32 @@ def save_article(entry, source, keyword, score, reason):
         return False
 
 def analyze_relevance_with_ai(title, summary, keyword):
-    if not client: return 85, "Automatisk score (mangler nøkkel)"
+    if not client: return 50, "Automatisk score (mangler nøkkel)"
     
     clean_title = clean_html(title)
     clean_summary = clean_html(summary)
     
+    # --- NY NYANSERT INSTRUKS ---
     prompt = f"""
-    Du er nyhetssjef for Telemarksavisa.
+    Du er nyhetsredaktør for Telemarksavisa (TA).
     Søkeord funnet: '{keyword}'.
+    
     Tittel: {clean_title}
     Ingress: {clean_summary}
     
-    INSTRUKSJONER:
-    1. Vær RAUS med poengene.
-    2. Hvis søkeordet '{keyword}' er nevnt -> Gi MINST 80 poeng.
-    3. Hvis saken handler om Telemark -> Gi 90-100 poeng.
-    4. Begrunnelse: MAKS 10 ord.
+    Din oppgave: Gi en score fra 0-100 basert på nyhetsverdi for Telemark.
+    
+    BRUK DENNE SKALAEN:
+    0-39:  Irrelevant / Støy.
+    40-69: LAV RELEVANS. (F.eks. Skien er nevnt langt ned i saken, eller saken er generell riksnyhet uten lokal vinkel).
+    70-89: HØY RELEVANS. (Saken handler om Telemark/Grenland, lokale bedrifter, kultur eller sport).
+    90-100: BREAKING / KRITISK. (Ulykker, blålys, store industrinyheter, E18-stengning, store politiske vedtak).
+    
+    Vær streng! Ikke gi 90 poeng med mindre det virkelig brenner.
+    Begrunnelse: Maks 8 ord.
     
     Format: 
-    Score: [tall 0-100] 
+    Score: [tall] 
     Begrunnelse: [Kort tekst]
     """
     
@@ -133,13 +134,13 @@ def analyze_relevance_with_ai(title, summary, keyword):
             score_part = content.split("Score:")[1].split("\n")[0]
             score = int(''.join(filter(str.isdigit, score_part)))
             
-        reason = "Relevant for Telemark"
+        reason = "Relevant"
         if "Begrunnelse:" in content:
             reason = content.split("Begrunnelse:")[1].strip()
             
         return score, reason
     except Exception:
-        return 80, "AI feilet, satte standard score"
+        return 50, "AI feilet"
 
 def fetch_and_filter_news(keywords):
     new_hits = 0
@@ -208,7 +209,6 @@ def main():
             hits = fetch_and_filter_news(active_keywords)
             if hits: st.toast(f"Fant {hits} nye saker!", icon="🔥")
             
-            # BRUKER NORSK TID HER FOR NESTE KJØRING
             next_run = get_norway_time() + timedelta(minutes=10)
             t_str = next_run.strftime("%H:%M")
             st.info(f"✅ Ferdig. Sover til {t_str}")
@@ -232,7 +232,7 @@ def main():
                 dummy.title = "Test-sak fra Skien"
                 dummy.summary = "Dette er en test."
                 dummy.published = "Nå"
-                if save_article(dummy, "TestKilde", "Skien", 95, "Test av høy score"):
+                if save_article(dummy, "TestKilde", "Skien", 85, "Test av score"):
                     st.success("Test lagret!")
                     time.sleep(1)
                     st.rerun()
@@ -248,14 +248,12 @@ def main():
         df = pd.DataFrame()
 
     if not df.empty:
-        # BRUKER NORSK TID HER FOR FILTRERING AV DAGENS SAKER
         today = get_norway_time().strftime("%Y-%m-%d")
         todays_news = df[df['found_at'].str.contains(today)]
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Saker i dag", len(todays_news))
         c2.metric("Snitt-score", int(df['ai_score'].mean()) if not df.empty else 0)
-        # BRUKER NORSK TID HER FOR SISTE SJEKK
         c3.metric("Siste oppdatering", get_norway_time().strftime("%H:%M"))
         st.divider()
 
@@ -264,21 +262,4 @@ def main():
             cols = st.columns(cols_per_row)
             for j in range(cols_per_row):
                 if i + j < len(df):
-                    row = df.iloc[i + j]
-                    score = row['ai_score'] if row['ai_score'] else 0
-                    header_color = "red" if score >= 80 else "orange" if score >= 50 else "grey"
-                    
-                    with cols[j]:
-                        with st.container(border=True):
-                            st.markdown(f"**Score: :{header_color}[{score}]**")
-                            st.markdown(f"#### [{row['title']}]({row['link']})")
-                            st.info(f"🤖 {row['ai_reason']}")
-                            st.caption(f"📍 {row['matched_keyword']} | 📰 {row['source']}")
-                            
-                            # Viser tidsstempel (som nå er lagret i norsk tid)
-                            st.caption(f"🕒 Funnet: {row['found_at']}")
-    else:
-        st.info("Ingen saker funnet ennå. Trykk på '🔎 Søk manuelt' for å starte.")
-
-if __name__ == "__main__":
-    main()
+                    row = df.iloc
