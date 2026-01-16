@@ -8,6 +8,7 @@ from openai import OpenAI
 import os
 import re
 import requests
+from bs4 import BeautifulSoup  # <--- NY: For å lese Brreg
 
 # --- 1. Sette opp siden ---
 st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
@@ -47,7 +48,7 @@ DEFAULT_KEYWORDS = [
     "E18", "E134", "Riksvei 36", "Fylkesvei", "Geiteryggen",
     "Breviksbrua", "Grenlandsbrua", "Yara", "Herøya", "Hydro", 
     "Sykehuset Telemark", "Universitetet i Sørøst-Norge", "Skagerak Energi",
-    "Odd", "Urædd", "Pors", "Siljan", "Drangedal", "Haukeli", "Sør-Øst", 
+    "Odd", "Urædd", "Pors", "Siljan"
 ]
 
 # --- 3. Tids-fikser (UTC + 1 time) ---
@@ -112,9 +113,7 @@ def save_article(entry, source, keyword, score, reason):
                      (link, title, link, summary, source, published, found_at, keyword, score, reason, 'Ny'))
             conn.commit()
         
-        # Sender til Slack
         send_slack_notification(title, link, score, reason, source)
-        
         return True
     except Exception as e:
         st.error(f"Lagringsfeil: {e}")
@@ -128,19 +127,20 @@ def analyze_relevance_with_ai(title, summary, keyword):
     
     prompt = f"""
     Du er nyhetsredaktør for Telemarksavisa.
-    Søkeord: '{keyword}'.
+    Søkeord/Tema: '{keyword}'.
     Tittel: {clean_title}
-    Ingress: {clean_summary}
+    Ingress/Info: {clean_summary}
     
     Gi score 0-100 basert på lokal relevans for Telemark.
     
     SKALA:
     0-39: Irrelevant/Støy.
-    40-69: LAV (Generell sak, eller stedsnavn nevnt i bisetning).
+    40-69: LAV.
     70-89: HØY (Handler om Telemark/lokale forhold).
-    90-100: BREAKING/KRITISK (Blålys, store kriser, store lokale nyheter).
+    90-100: BREAKING/KRITISK (Konkursåpning, blålys, store kriser).
     
-    Vær streng på 90+.
+    MERK: Hvis dette er en KONKURS i Telemark -> Gi minst 85 poeng.
+    
     Begrunnelse: Maks 8 ord.
     Format: Score: [tall] Begrunnelse: [tekst]
     """
@@ -162,13 +162,63 @@ def analyze_relevance_with_ai(title, summary, keyword):
     except Exception:
         return 50, "AI feilet"
 
+# --- NY: BRØNNØYSUND-SJEKK ---
+def check_brreg():
+    hits = 0
+    # 1. Generer dagens dato (DD.MM.YYYY)
+    today_str = datetime.now().strftime("%d.%m.%Y")
+    
+    # 2. Bygg URL (Fylke 40=Telemark, Niva1 51=Konkurs)
+    url = f"https://w2.brreg.no/kunngjoring/kombisok.jsp?datoFra={today_str}&datoTil={today_str}&id_region=400&id_fylke=40&id_kommune=-+-+-&id_niva1=51&id_niva2=-+-+-&id_bransje1=0"
+    
+    try:
+        # 3. Hent nettsiden
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers)
+        r.encoding = 'ISO-8859-1' # Brreg bruker ofte gammel koding
+        
+        # 4. Les HTML
+        soup = BeautifulSoup(r.text, 'html.parser')
+        
+        # Finn tabellen med resultater. Vi ser etter lenker som inneholder 'hent_enhet.jsp'
+        for link in soup.find_all('a', href=True):
+            if "hent_enhet.jsp" in link['href']:
+                company_name = link.text.strip()
+                full_link = f"https://w2.brreg.no/kunngjoring/{link['href']}"
+                
+                # Sjekk om vi har den fra før
+                if not article_exists(full_link):
+                    # Lager et falskt "RSS-entry" objekt
+                    class BrregEntry: pass
+                    entry = BrregEntry()
+                    entry.title = f"KONKURS: {company_name}"
+                    entry.summary = "Ny kunngjøring registrert i Brønnøysundregistrene (Telemark)."
+                    entry.link = full_link
+                    entry.published = today_str
+                    
+                    # Analyser med AI (Tvinger høy relevans)
+                    score, reason = analyze_relevance_with_ai(entry.title, entry.summary, "Konkurs Telemark")
+                    
+                    # Lagre
+                    if save_article(entry, "Brønnøysund", "Konkurs", score, reason):
+                        hits += 1
+    except Exception as e:
+        print(f"Brreg-feil: {e}")
+        
+    return hits
+
 def fetch_and_filter_news(keywords):
     new_hits = 0
     status_box = st.sidebar.empty()
     progress = st.sidebar.progress(0)
     
-    USER_AGENT = "Mozilla/5.0"
+    # --- 1. SJEKK BRØNNØYSUND FØRST ---
+    status_box.text("Sjekker Brønnøysundregistrene...")
+    brreg_hits = check_brreg()
+    new_hits += brreg_hits
 
+    # --- 2. SJEKK RSS ---
+    USER_AGENT = "Mozilla/5.0"
     for i, url in enumerate(RSS_SOURCES):
         status_box.text(f"Leser {url}...")
         try: 
@@ -224,51 +274,41 @@ def main():
         if st.button("🔎 Søk manuelt", type="primary"):
             hits = fetch_and_filter_news(active_keywords)
             if hits > 0: 
-                # Lagrer info
                 st.session_state.last_hits_count = hits
                 st.session_state.last_hits_time = get_norway_time().strftime("%H:%M")
                 st.rerun()
             else: 
                 st.info("Ingen nye treff.")
-
-        st.divider()
         
-        # --- HER ER TEST-KNAPPEN ---
-        if st.button("🛠️ Test Slack-varsling"):
+        st.divider()
+        if st.button("🛠️ Test Slack"):
             try:
-                # Lager en falsk nyhet for å teste Slack
                 class MockEntry: pass
                 dummy = MockEntry()
                 dummy.link = f"http://test-slack-{int(time.time())}.no"
-                dummy.title = "TEST: Stor brannøvelse på Herøya (Dette er en test)"
-                dummy.summary = "Dette er en test for å sjekke om Slack-varsling fungerer som det skal."
+                dummy.title = "TEST: Stor brannøvelse på Herøya"
+                dummy.summary = "Dette er en test for Slack-varsling."
                 dummy.published = "Nå"
-                
-                # Lagrer med score 95 for å garantere varsling
-                if save_article(dummy, "Systemtest", "Herøya", 95, "Test av varslingssystem"):
-                    st.toast("Test sendt! Sjekk Slack.", icon="🚀")
+                if save_article(dummy, "Systemtest", "Herøya", 95, "Test"):
+                    st.toast("Test sendt!", icon="🚀")
                     time.sleep(1)
                     st.rerun()
             except Exception as e:
-                st.error(f"Test feilet: {e}")
+                st.error(f"Feil: {e}")
 
     # --- AUTOPILOT LOGIKK ---
     if auto_run:
         if 'last_check' not in st.session_state:
             st.session_state.last_check = datetime.min
         
-        # Hvis det er tid for ny sjekk
         if datetime.now() - st.session_state.last_check > timedelta(minutes=10):
             hits = fetch_and_filter_news(active_keywords)
             st.session_state.last_check = datetime.now()
-            
             st.session_state.last_hits_count = hits
             st.session_state.last_hits_time = get_norway_time().strftime("%H:%M")
-            
             st.rerun()
 
     # --- VISNING AV NYHETER ---
-    
     if 'last_hits_count' in st.session_state and st.session_state.last_hits_count > 0:
         st.success(f"🚨 Siste søk (kl {st.session_state.last_hits_time}) fant **{st.session_state.last_hits_count}** nye saker!")
 
@@ -295,7 +335,6 @@ def main():
                 if i + j < len(df):
                     row = df.iloc[i + j]
                     score = row['ai_score'] if row['ai_score'] else 0
-                    
                     header_color = "red" if score >= 85 else "orange" if score >= 60 else "grey"
                     
                     with cols[j]:
@@ -308,7 +347,6 @@ def main():
     else:
         st.info("Ingen saker funnet ennå.")
 
-    # --- AUTOPILOT PAUSE ---
     if auto_run:
         next_run_server = st.session_state.last_check + timedelta(minutes=10)
         next_run_display = next_run_server + timedelta(hours=1)
@@ -318,4 +356,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
