@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import time
 from openai import OpenAI
+import os
 import re
 
 # --- 1. Sette opp siden ---
@@ -13,13 +14,11 @@ st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
 # --- 2. Konfigurasjon ---
 DB_FILE = "ta_nyhetsbot.db"
 
-# Henter nøkkelen fra secrets (skyen) eller fallback (lokalt)
 try:
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except:
     OPENAI_API_KEY = "" 
 
-# Initialiser AI
 client = None
 if "sk-" in OPENAI_API_KEY:
     client = OpenAI(api_key=OPENAI_API_KEY)
@@ -51,35 +50,65 @@ def clean_html(raw_html):
     return re.sub(cleanr, '', raw_html).strip()
 
 def init_db():
-    with sqlite3.connect(DB_FILE) as conn:
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS articles (id TEXT PRIMARY KEY, title TEXT, link TEXT, summary TEXT, source TEXT, published TEXT, found_at TEXT, matched_keyword TEXT, ai_score INTEGER, ai_reason TEXT, status TEXT DEFAULT 'Ny')''')
-        conn.commit()
-
-def article_exists(link):
-    with sqlite3.connect(DB_FILE) as conn:
-        c = conn.cursor()
-        res = c.execute("SELECT 1 FROM articles WHERE link = ?", (link,)).fetchone()
-    return res is not None
-
-def save_article(entry, source, keyword, score, reason):
-    title = clean_html(entry.title)
-    summary = clean_html(getattr(entry, 'summary', ''))
     try:
         with sqlite3.connect(DB_FILE) as conn:
             c = conn.cursor()
-            c.execute("INSERT INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)", (entry.link, title, entry.link, summary, source, getattr(entry, 'published', 'Ukjent'), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), keyword, score, reason, 'Ny'))
+            c.execute('''CREATE TABLE IF NOT EXISTS articles (id TEXT PRIMARY KEY, title TEXT, link TEXT, summary TEXT, source TEXT, published TEXT, found_at TEXT, matched_keyword TEXT, ai_score INTEGER, ai_reason TEXT, status TEXT DEFAULT 'Ny')''')
+            conn.commit()
+    except Exception as e:
+        st.error(f"Database-feil ved oppstart: {e}")
+
+def article_exists(link):
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            c = conn.cursor()
+            res = c.execute("SELECT 1 FROM articles WHERE link = ?", (link,)).fetchone()
+        return res is not None
+    except:
+        return False
+
+def save_article(entry, source, keyword, score, reason):
+    try:
+        title = clean_html(entry.title)
+        summary = clean_html(getattr(entry, 'summary', ''))
+        link = entry.link
+        published = getattr(entry, 'published', 'Ukjent')
+        found_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with sqlite3.connect(DB_FILE) as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)", 
+                     (link, title, link, summary, source, published, found_at, keyword, score, reason, 'Ny'))
             conn.commit()
         return True
-    except: 
+    except Exception as e:
+        st.error(f"Kunne ikke lagre sak: {e}")
         return False
 
 def analyze_relevance_with_ai(title, summary, keyword):
-    if not client: return 50, "Mangler API-nøkkel"
+    if not client: return 85, "Automatisk score (mangler nøkkel)" # Standard høy score hvis AI mangler
+    
     clean_title = clean_html(title)
     clean_summary = clean_html(summary)
     
-    prompt = f"Vurder sak for Telemarksavisa. Søkeord: '{keyword}'. Tittel: {clean_title}. Ingress: {clean_summary}. VIKTIG: Begrunnelsen skal være ekstremt kort (maks 10-15 ord). Format: Score: [tall] Begrunnelse: [tekst]"
+    # --- NY OG AGGRESSIV INSTRUKS ---
+    prompt = f"""
+    Du er nyhetssjef for Telemarksavisa.
+    Søkeord funnet i saken: '{keyword}'.
+    
+    Tittel: {clean_title}
+    Ingress: {clean_summary}
+    
+    DINE INSTRUKSJONER:
+    1. Vær RAUS med poengene. Vi vil heller se for mye enn for lite.
+    2. Hvis søkeordet '{keyword}' er nevnt i tekst eller tittel -> Gi MINST 80 poeng.
+    3. Hvis saken handler direkte om Telemark/Grenland -> Gi 90-100 poeng.
+    4. Begrunnelsen skal være ekstremt kort (maks 10 ord).
+    
+    Format: 
+    Score: [tall 0-100] 
+    Begrunnelse: [Kort tekst]
+    """
     
     try:
         response = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}])
@@ -90,13 +119,13 @@ def analyze_relevance_with_ai(title, summary, keyword):
             score_part = content.split("Score:")[1].split("\n")[0]
             score = int(''.join(filter(str.isdigit, score_part)))
             
-        reason = "Ingen begrunnelse"
+        reason = "Relevant for Telemark"
         if "Begrunnelse:" in content:
             reason = content.split("Begrunnelse:")[1].strip()
             
         return score, reason
     except Exception:
-        return 0, "AI feilet"
+        return 80, "AI feilet, satte standard score"
 
 def fetch_and_filter_news(keywords):
     new_hits = 0
@@ -124,9 +153,11 @@ def fetch_and_filter_news(keywords):
                 if hit:
                     if not article_exists(entry.link):
                         score, reason = analyze_relevance_with_ai(entry.title, getattr(entry, 'summary', ''), hit)
-                        save_article(entry, feed.feed.get('title', url), hit, score, reason)
-                        new_hits += 1
-        except Exception: 
+                        success = save_article(entry, feed.feed.get('title', url), hit, score, reason)
+                        if success:
+                            new_hits += 1
+        except Exception as e:
+            st.sidebar.error(f"Feil i feed: {e}")
             continue
         progress.progress((i+1)/len(RSS_SOURCES))
     
@@ -142,6 +173,16 @@ def main():
     # --- SIDEBAR LOGIKK ---
     with st.sidebar:
         st.header("TA Monitor")
+        
+        if st.button("🗑️ Nullstill database"):
+            try:
+                os.remove(DB_FILE)
+                st.success("Database slettet! Laster siden på nytt...")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.warning(f"Kunne ikke slette: {e}")
+
         st.subheader("📍 Geofilter")
         
         user_input = st.text_area("Søkeord", value=", ".join(DEFAULT_KEYWORDS), height=150)
@@ -171,62 +212,29 @@ def main():
                 st.info("Ingen nye treff.")
 
         if st.button("🛠️ Test"):
-            # Enkel test-logikk uten kompliserte klasser
             try:
-                class MockEntry:
-                    title = "Test-sak"
-                    link = f"http://test{int(time.time())}.no"
-                    summary = "Kort ingress."
-                    published = "Nå"
-                
+                class MockEntry: pass
                 dummy = MockEntry()
-                save_article(dummy, "TestKilde", "Skien", 85, "Kort svar.")
-                st.success("Test lagret!")
-                time.sleep(1)
-                st.rerun()
+                dummy.link = f"http://test{int(time.time())}.no"
+                dummy.title = "Test-sak fra Skien"
+                dummy.summary = "Dette er en test."
+                dummy.published = "Nå"
+                
+                # Test med hardkodet høy score
+                if save_article(dummy, "TestKilde", "Skien", 95, "Test av høy score"):
+                    st.success("Test lagret i DB!")
+                    time.sleep(1)
+                    st.rerun()
             except Exception as e:
-                st.error(f"Feil: {e}")
+                st.error(f"Test feilet: {e}")
 
     # --- HOVEDVINDU (VISNING) ---
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
-    except Exception:
+    except Exception as e:
+        st.error(f"Kunne ikke lese fra database: {e}")
         df = pd.DataFrame()
 
     if not df.empty:
-        today = datetime.now().strftime("%Y-%m-%d")
-        todays_news = df[df['found_at'].str.contains(today)]
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Saker i dag", len(todays_news))
-        c2.metric("🔥 Høy relevans", len(todays_news[todays_news['ai_score'] > 70]))
-        c3.metric("Siste sjekk", datetime.now().strftime("%H:%M"))
-        st.divider()
-
-        tab1, tab2 = st.tabs(["🔥 Viktigste", "🗄️ Arkiv"])
-        
-        def render_grid(dataframe):
-            cols_per_row = 3
-            for i in range(0, len(dataframe), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for j in range(cols_per_row):
-                    if i + j < len(dataframe):
-                        row = dataframe.iloc[i + j]
-                        score = row['ai_score'] if row['ai_score'] else 0
-                        header_color = "red" if score > 70 else "orange" if score > 30 else "grey"
-                        
-                        with cols[j]:
-                            with st.container(border=True):
-                                st.markdown(f"**Score: :{header_color}[{score}]**")
-                                st.markdown(f"#### [{row['title']}]({row['link']})")
-                                st.info(f"🤖 {row['ai_reason']}")
-                                st.caption(f"📍 {row['matched_keyword']} | 📰 {row['source']}")
-                                st.caption(f"🕒 {row['found_at']}")
-
-        with tab1: render_grid(df[df['ai_score'] > 70])
-        with tab2: render_grid(df)
-    else:
-        st.info("Ingen saker funnet ennå. Trykk på '🔎 Søk manuelt' eller '🛠️ Test'.")
-
-if __name__ == "__main__":
-    main()
+        today = datetime.now().strftime
