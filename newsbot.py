@@ -43,15 +43,10 @@ DEFAULT_KEYWORDS = [
     "Odd", "Urædd", "Pors", "Notodden FK"
 ]
 
-# --- 3. Tids-fikser (Norsk Tid) ---
+# --- 3. Enkel tidsfikser (Manuell +1 time) ---
 def get_norway_time():
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo("Europe/Oslo"))
-    except ImportError:
-        return datetime.now() + timedelta(hours=1)
-    except Exception:
-        return datetime.now()
+    # Enkel løsning: Tar server-tid og legger til 1 time
+    return datetime.now() + timedelta(hours=1)
 
 # --- 4. Hjelpefunksjoner ---
 def clean_html(raw_html):
@@ -66,7 +61,7 @@ def init_db():
             c.execute('''CREATE TABLE IF NOT EXISTS articles (id TEXT PRIMARY KEY, title TEXT, link TEXT, summary TEXT, source TEXT, published TEXT, found_at TEXT, matched_keyword TEXT, ai_score INTEGER, ai_reason TEXT, status TEXT DEFAULT 'Ny')''')
             conn.commit()
     except Exception as e:
-        st.error(f"Database-feil ved oppstart: {e}")
+        st.error(f"Database-feil: {e}")
 
 def article_exists(link):
     try:
@@ -83,6 +78,8 @@ def save_article(entry, source, keyword, score, reason):
         summary = clean_html(getattr(entry, 'summary', ''))
         link = entry.link
         published = getattr(entry, 'published', 'Ukjent')
+        
+        # Bruker enkel norsk tid
         found_at = get_norway_time().strftime("%Y-%m-%d %H:%M:%S")
 
         with sqlite3.connect(DB_FILE) as conn:
@@ -92,37 +89,34 @@ def save_article(entry, source, keyword, score, reason):
             conn.commit()
         return True
     except Exception as e:
-        st.error(f"Kunne ikke lagre sak: {e}")
+        st.error(f"Lagringsfeil: {e}")
         return False
 
 def analyze_relevance_with_ai(title, summary, keyword):
-    if not client: return 50, "Automatisk score (mangler nøkkel)"
+    if not client: return 50, "Mangler nøkkel"
     
     clean_title = clean_html(title)
     clean_summary = clean_html(summary)
     
-    # --- NY NYANSERT INSTRUKS ---
+    # --- NY NYANSERT INSTRUKS (For bedre score-spredning) ---
     prompt = f"""
-    Du er nyhetsredaktør for Telemarksavisa (TA).
-    Søkeord funnet: '{keyword}'.
-    
+    Du er nyhetsredaktør for Telemarksavisa.
+    Søkeord: '{keyword}'.
     Tittel: {clean_title}
     Ingress: {clean_summary}
     
-    Din oppgave: Gi en score fra 0-100 basert på nyhetsverdi for Telemark.
+    Gi score 0-100 basert på lokal relevans for Telemark.
     
-    BRUK DENNE SKALAEN:
-    0-39:  Irrelevant / Støy.
-    40-69: LAV RELEVANS. (F.eks. Skien er nevnt langt ned i saken, eller saken er generell riksnyhet uten lokal vinkel).
-    70-89: HØY RELEVANS. (Saken handler om Telemark/Grenland, lokale bedrifter, kultur eller sport).
-    90-100: BREAKING / KRITISK. (Ulykker, blålys, store industrinyheter, E18-stengning, store politiske vedtak).
+    SKALA:
+    0-39: Irrelevant/Støy.
+    40-69: LAV (Generell sak, eller stedsnavn nevnt i bisetning).
+    70-89: HØY (Handler om Telemark/lokale forhold).
+    90-100: BREAKING/KRITISK (Blålys, store kriser, store lokale nyheter).
     
-    Vær streng! Ikke gi 90 poeng med mindre det virkelig brenner.
+    Vær streng på 90+.
     Begrunnelse: Maks 8 ord.
     
-    Format: 
-    Score: [tall] 
-    Begrunnelse: [Kort tekst]
+    Format: Score: [tall] Begrunnelse: [tekst]
     """
     
     try:
@@ -147,7 +141,7 @@ def fetch_and_filter_news(keywords):
     status_box = st.sidebar.empty()
     progress = st.sidebar.progress(0)
     
-    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    USER_AGENT = "Mozilla/5.0"
 
     for i, url in enumerate(RSS_SOURCES):
         status_box.text(f"Leser {url}...")
@@ -155,7 +149,6 @@ def fetch_and_filter_news(keywords):
             feed = feedparser.parse(url, agent=USER_AGENT)
             for entry in feed.entries:
                 
-                # EKSKLUDER TA
                 t = entry.title.lower()
                 s = feed.feed.get('title', '').lower()
                 l = entry.link.lower()
@@ -171,8 +164,7 @@ def fetch_and_filter_news(keywords):
                         success = save_article(entry, feed.feed.get('title', url), hit, score, reason)
                         if success:
                             new_hits += 1
-        except Exception as e:
-            st.sidebar.error(f"Feil i feed: {e}")
+        except Exception:
             continue
         progress.progress((i+1)/len(RSS_SOURCES))
     
@@ -185,18 +177,16 @@ def main():
     st.title("🗞️ Nyhetsstrøm for Telemark")
     init_db()
 
-    # --- SIDEBAR ---
     with st.sidebar:
         st.header("TA Monitor")
         
         if st.button("🗑️ Nullstill database"):
             try:
                 os.remove(DB_FILE)
-                st.success("Slettet! Laster på nytt...")
+                st.success("Slettet!")
                 time.sleep(1)
                 st.rerun()
-            except Exception as e:
-                st.warning(f"Kunne ikke slette: {e}")
+            except: pass
 
         st.subheader("📍 Geofilter")
         user_input = st.text_area("Søkeord", value=", ".join(DEFAULT_KEYWORDS), height=150)
@@ -207,11 +197,10 @@ def main():
         
         if auto_run:
             hits = fetch_and_filter_news(active_keywords)
-            if hits: st.toast(f"Fant {hits} nye saker!", icon="🔥")
+            if hits: st.toast(f"Fant {hits} nye!", icon="🔥")
             
             next_run = get_norway_time() + timedelta(minutes=10)
-            t_str = next_run.strftime("%H:%M")
-            st.info(f"✅ Ferdig. Sover til {t_str}")
+            st.info(f"✅ Ferdig. Sover til {next_run.strftime('%H:%M')}")
             time.sleep(600) 
             st.rerun()
             
@@ -224,27 +213,10 @@ def main():
             else: 
                 st.info("Ingen nye treff.")
 
-        if st.button("🛠️ Test"):
-            try:
-                class MockEntry: pass
-                dummy = MockEntry()
-                dummy.link = f"http://test{int(time.time())}.no"
-                dummy.title = "Test-sak fra Skien"
-                dummy.summary = "Dette er en test."
-                dummy.published = "Nå"
-                if save_article(dummy, "TestKilde", "Skien", 85, "Test av score"):
-                    st.success("Test lagret!")
-                    time.sleep(1)
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Test feilet: {e}")
-
-    # --- HOVEDVISNING ---
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
-    except Exception as e:
-        st.error(f"Databasefeil: {e}")
+    except:
         df = pd.DataFrame()
 
     if not df.empty:
@@ -254,7 +226,7 @@ def main():
         c1, c2, c3 = st.columns(3)
         c1.metric("Saker i dag", len(todays_news))
         c2.metric("Snitt-score", int(df['ai_score'].mean()) if not df.empty else 0)
-        c3.metric("Siste oppdatering", get_norway_time().strftime("%H:%M"))
+        c3.metric("Siste sjekk", get_norway_time().strftime("%H:%M"))
         st.divider()
 
         cols_per_row = 3
@@ -262,4 +234,21 @@ def main():
             cols = st.columns(cols_per_row)
             for j in range(cols_per_row):
                 if i + j < len(df):
-                    row = df.iloc
+                    row = df.iloc[i + j]
+                    score = row['ai_score'] if row['ai_score'] else 0
+                    
+                    # Farger: Rød (85+), Oransje (60-84), Grå (<60)
+                    header_color = "red" if score >= 85 else "orange" if score >= 60 else "grey"
+                    
+                    with cols[j]:
+                        with st.container(border=True):
+                            st.markdown(f"**Score: :{header_color}[{score}]**")
+                            st.markdown(f"#### [{row['title']}]({row['link']})")
+                            st.info(f"🤖 {row['ai_reason']}")
+                            st.caption(f"📍 {row['matched_keyword']} | 📰 {row['source']}")
+                            st.caption(f"🕒 {row['found_at']}")
+    else:
+        st.info("Ingen saker funnet ennå. Trykk på '🔎 Søk manuelt'.")
+
+if __name__ == "__main__":
+    main()
