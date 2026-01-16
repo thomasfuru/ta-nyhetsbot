@@ -43,7 +43,7 @@ DEFAULT_KEYWORDS = [
     "Odd", "Urædd", "Pors", "Notodden FK"
 ]
 
-# --- 3. Tids-fikser ---
+# --- 3. Tids-fikser (UTC + 1 time) ---
 def get_norway_time():
     return datetime.now() + timedelta(hours=1)
 
@@ -193,24 +193,23 @@ def main():
         if st.button("🔎 Søk manuelt", type="primary"):
             hits = fetch_and_filter_news(active_keywords)
             if hits > 0: 
-                # Lagrer info til manuell søk også
+                # Lagrer info
                 st.session_state.last_hits_count = hits
                 st.session_state.last_hits_time = get_norway_time().strftime("%H:%M")
                 st.rerun()
             else: 
                 st.info("Ingen nye treff.")
 
-    # --- AUTOPILOT LOGIKK (Kjøres FØR visning) ---
+    # --- AUTOPILOT LOGIKK ---
     if auto_run:
         if 'last_check' not in st.session_state:
             st.session_state.last_check = datetime.min
         
-        # Hvis det er tid for ny sjekk (hvert 10. minutt)
+        # Hvis det er tid for ny sjekk
         if datetime.now() - st.session_state.last_check > timedelta(minutes=10):
             hits = fetch_and_filter_news(active_keywords)
             st.session_state.last_check = datetime.now()
             
-            # Lagre resultatene i "minnet" til appen
             st.session_state.last_hits_count = hits
             st.session_state.last_hits_time = get_norway_time().strftime("%H:%M")
             
@@ -218,11 +217,11 @@ def main():
 
     # --- VISNING AV NYHETER ---
     
-    # 1. VIS VARSEL OM NYE SAKER (HVIS DET FINNES)
+    # 1. VARSEL OM NYE SAKER
     if 'last_hits_count' in st.session_state and st.session_state.last_hits_count > 0:
         st.success(f"🚨 Siste søk (kl {st.session_state.last_hits_time}) fant **{st.session_state.last_hits_count}** nye saker!")
 
-    # 2. HENT DATA FRA DATABASE
+    # 2. HENT DATA
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
@@ -259,10 +258,15 @@ def main():
     else:
         st.info("Ingen saker funnet ennå.")
 
-    # --- AUTOPILOT PAUSE (Etter visning) ---
+    # --- AUTOPILOT PAUSE (Med riktig tidsvisning i menyen) ---
     if auto_run:
-        next_run = st.session_state.last_check + timedelta(minutes=10)
-        st.sidebar.info(f"💤 Neste sjekk: {next_run.strftime('%H:%M')}")
+        # Beregner neste kjøring (Server-tid)
+        next_run_server = st.session_state.last_check + timedelta(minutes=10)
+        
+        # Konverterer til Norsk tid for visning (+1 time)
+        next_run_display = next_run_server + timedelta(hours=1)
+        
+        st.sidebar.info(f"💤 Neste sjekk: {next_run_display.strftime('%H:%M')}")
         time.sleep(30)
         st.rerun()
 
