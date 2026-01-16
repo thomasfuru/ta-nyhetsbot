@@ -7,7 +7,7 @@ import time
 from openai import OpenAI
 import os
 import re
-import requests  # <--- NY: For å sende til Slack
+import requests
 
 # --- 1. Sette opp siden ---
 st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
@@ -15,7 +15,7 @@ st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
 # --- 2. Konfigurasjon ---
 DB_FILE = "ta_nyhetsbot.db"
 
-# Henter API-nøkler fra Secrets
+# Henter API-nøkler
 try:
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except:
@@ -78,17 +78,20 @@ def article_exists(link):
     except:
         return False
 
-# --- NY: SLACK VARSLING ---
+# --- SLACK VARSLING (Oppdatert grense) ---
 def send_slack_notification(title, link, score, reason, source):
     if not SLACK_WEBHOOK_URL:
-        return # Ingen URL satt opp, gjør ingenting
+        return 
     
-    # Send kun hvis score er høy (Rød sone)
-    if score < 85:
+    # ENDRET: Terskel senket til 70
+    if score < 70:
         return
 
+    # Tilpasser overskriften basert på score
+    prefix = "🚨 *BREAKING*" if score >= 90 else "📣 *VIKTIG SAK*"
+
     payload = {
-        "text": f"🚨 *BREAKING / VIKTIG ({score} poeng)*\n*<{link}|{title}>*\n🤖 {reason}\n📰 Kilde: {source}"
+        "text": f"{prefix} ({score} poeng)\n*<{link}|{title}>*\n🤖 {reason}\n📰 Kilde: {source}"
     }
     
     try:
@@ -110,7 +113,7 @@ def save_article(entry, source, keyword, score, reason):
                      (link, title, link, summary, source, published, found_at, keyword, score, reason, 'Ny'))
             conn.commit()
         
-        # --- NY: PRØVER Å SENDE TIL SLACK ---
+        # Sender til Slack (hvis score >= 70)
         send_slack_notification(title, link, score, reason, source)
         
         return True
@@ -222,6 +225,7 @@ def main():
         if st.button("🔎 Søk manuelt", type="primary"):
             hits = fetch_and_filter_news(active_keywords)
             if hits > 0: 
+                # Lagrer info
                 st.session_state.last_hits_count = hits
                 st.session_state.last_hits_time = get_norway_time().strftime("%H:%M")
                 st.rerun()
@@ -245,9 +249,11 @@ def main():
 
     # --- VISNING AV NYHETER ---
     
+    # 1. VARSEL OM NYE SAKER
     if 'last_hits_count' in st.session_state and st.session_state.last_hits_count > 0:
         st.success(f"🚨 Siste søk (kl {st.session_state.last_hits_time}) fant **{st.session_state.last_hits_count}** nye saker!")
 
+    # 2. HENT DATA
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
