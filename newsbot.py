@@ -43,9 +43,8 @@ DEFAULT_KEYWORDS = [
     "Odd", "Urædd", "Pors", "Notodden FK"
 ]
 
-# --- 3. Enkel tidsfikser (Manuell +1 time) ---
+# --- 3. Tids-fikser ---
 def get_norway_time():
-    # Enkel løsning: Tar server-tid og legger til 1 time
     return datetime.now() + timedelta(hours=1)
 
 # --- 4. Hjelpefunksjoner ---
@@ -78,8 +77,6 @@ def save_article(entry, source, keyword, score, reason):
         summary = clean_html(getattr(entry, 'summary', ''))
         link = entry.link
         published = getattr(entry, 'published', 'Ukjent')
-        
-        # Bruker enkel norsk tid
         found_at = get_norway_time().strftime("%Y-%m-%d %H:%M:%S")
 
         with sqlite3.connect(DB_FILE) as conn:
@@ -98,7 +95,6 @@ def analyze_relevance_with_ai(title, summary, keyword):
     clean_title = clean_html(title)
     clean_summary = clean_html(summary)
     
-    # --- NY NYANSERT INSTRUKS (For bedre score-spredning) ---
     prompt = f"""
     Du er nyhetsredaktør for Telemarksavisa.
     Søkeord: '{keyword}'.
@@ -115,7 +111,6 @@ def analyze_relevance_with_ai(title, summary, keyword):
     
     Vær streng på 90+.
     Begrunnelse: Maks 8 ord.
-    
     Format: Score: [tall] Begrunnelse: [tekst]
     """
     
@@ -127,7 +122,7 @@ def analyze_relevance_with_ai(title, summary, keyword):
         if "Score:" in content:
             score_part = content.split("Score:")[1].split("\n")[0]
             score = int(''.join(filter(str.isdigit, score_part)))
-            
+        
         reason = "Relevant"
         if "Begrunnelse:" in content:
             reason = content.split("Begrunnelse:")[1].strip()
@@ -148,7 +143,6 @@ def fetch_and_filter_news(keywords):
         try: 
             feed = feedparser.parse(url, agent=USER_AGENT)
             for entry in feed.entries:
-                
                 t = entry.title.lower()
                 s = feed.feed.get('title', '').lower()
                 l = entry.link.lower()
@@ -177,6 +171,7 @@ def main():
     st.title("🗞️ Nyhetsstrøm for Telemark")
     init_db()
 
+    # --- SIDEBAR KONFIGURASJON ---
     with st.sidebar:
         st.header("TA Monitor")
         
@@ -193,18 +188,10 @@ def main():
         active_keywords = [k.strip() for k in user_input.split(",") if k.strip()]
         st.divider()
         
+        # Vi lagrer bare statusen her, men kjører ikke loopen her inne!
         auto_run = st.toggle("🔄 Autopilot")
         
-        if auto_run:
-            hits = fetch_and_filter_news(active_keywords)
-            if hits: st.toast(f"Fant {hits} nye!", icon="🔥")
-            
-            next_run = get_norway_time() + timedelta(minutes=10)
-            st.info(f"✅ Ferdig. Sover til {next_run.strftime('%H:%M')}")
-            time.sleep(600) 
-            st.rerun()
-            
-        elif st.button("🔎 Søk manuelt", type="primary"):
+        if st.button("🔎 Søk manuelt", type="primary"):
             hits = fetch_and_filter_news(active_keywords)
             if hits > 0: 
                 st.success(f"Fant {hits} nye!")
@@ -213,6 +200,22 @@ def main():
             else: 
                 st.info("Ingen nye treff.")
 
+    # --- LOGIKK: Skal vi hente nyheter? (Flyttet ut av visningen) ---
+    # Sjekker om autopilot er på, OG om det er tid for ny sjekk
+    # (Dette gjør at vi henter data FØR vi tegner tabellen hvis det trengs)
+    if auto_run:
+        # Vi bruker en session_state for å huske når vi sist sjekket
+        if 'last_check' not in st.session_state:
+            st.session_state.last_check = datetime.min
+        
+        # Hvis det er mer enn 10 min siden sist sjekk
+        if datetime.now() - st.session_state.last_check > timedelta(minutes=10):
+            fetch_and_filter_news(active_keywords)
+            st.session_state.last_check = datetime.now()
+            # Rerun for å vise de nye treffene med en gang
+            st.rerun()
+
+    # --- VISNING: Tegn tabellen ---
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
@@ -237,7 +240,6 @@ def main():
                     row = df.iloc[i + j]
                     score = row['ai_score'] if row['ai_score'] else 0
                     
-                    # Farger: Rød (85+), Oransje (60-84), Grå (<60)
                     header_color = "red" if score >= 85 else "orange" if score >= 60 else "grey"
                     
                     with cols[j]:
@@ -248,7 +250,18 @@ def main():
                             st.caption(f"📍 {row['matched_keyword']} | 📰 {row['source']}")
                             st.caption(f"🕒 {row['found_at']}")
     else:
-        st.info("Ingen saker funnet ennå. Trykk på '🔎 Søk manuelt'.")
+        st.info("Ingen saker funnet ennå.")
+
+    # --- AUTOPILOT PAUSE (Helt til slutt) ---
+    # Nå som alt er tegnet, kan vi la scriptet vente hvis autopilot er på
+    if auto_run:
+        next_run = st.session_state.last_check + timedelta(minutes=10)
+        # Vi viser en liten beskjed i sidebaren
+        st.sidebar.info(f"💤 Neste sjekk: {next_run.strftime('%H:%M')}")
+        
+        # Sjekk hvert 30. sekund om vi skal kjøre igjen (for å holde siden 'live')
+        time.sleep(30)
+        st.rerun()
 
 if __name__ == "__main__":
     main()
