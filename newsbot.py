@@ -78,16 +78,15 @@ def article_exists(link):
     except:
         return False
 
-# --- SLACK VARSLING (Oppdatert grense) ---
+# --- SLACK VARSLING ---
 def send_slack_notification(title, link, score, reason, source):
     if not SLACK_WEBHOOK_URL:
         return 
     
-    # ENDRET: Terskel senket til 70
+    # Terskel: 70 poeng
     if score < 70:
         return
 
-    # Tilpasser overskriften basert på score
     prefix = "🚨 *BREAKING*" if score >= 90 else "📣 *VIKTIG SAK*"
 
     payload = {
@@ -113,7 +112,7 @@ def save_article(entry, source, keyword, score, reason):
                      (link, title, link, summary, source, published, found_at, keyword, score, reason, 'Ny'))
             conn.commit()
         
-        # Sender til Slack (hvis score >= 70)
+        # Sender til Slack
         send_slack_notification(title, link, score, reason, source)
         
         return True
@@ -232,6 +231,27 @@ def main():
             else: 
                 st.info("Ingen nye treff.")
 
+        st.divider()
+        
+        # --- HER ER TEST-KNAPPEN ---
+        if st.button("🛠️ Test Slack-varsling"):
+            try:
+                # Lager en falsk nyhet for å teste Slack
+                class MockEntry: pass
+                dummy = MockEntry()
+                dummy.link = f"http://test-slack-{int(time.time())}.no"
+                dummy.title = "TEST: Stor brannøvelse på Herøya (Dette er en test)"
+                dummy.summary = "Dette er en test for å sjekke om Slack-varsling fungerer som det skal."
+                dummy.published = "Nå"
+                
+                # Lagrer med score 95 for å garantere varsling
+                if save_article(dummy, "Systemtest", "Herøya", 95, "Test av varslingssystem"):
+                    st.toast("Test sendt! Sjekk Slack.", icon="🚀")
+                    time.sleep(1)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Test feilet: {e}")
+
     # --- AUTOPILOT LOGIKK ---
     if auto_run:
         if 'last_check' not in st.session_state:
@@ -249,11 +269,9 @@ def main():
 
     # --- VISNING AV NYHETER ---
     
-    # 1. VARSEL OM NYE SAKER
     if 'last_hits_count' in st.session_state and st.session_state.last_hits_count > 0:
         st.success(f"🚨 Siste søk (kl {st.session_state.last_hits_time}) fant **{st.session_state.last_hits_count}** nye saker!")
 
-    # 2. HENT DATA
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
