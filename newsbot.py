@@ -7,6 +7,7 @@ import time
 from openai import OpenAI
 import os
 import re
+import requests  # <--- NY: For å sende til Slack
 
 # --- 1. Sette opp siden ---
 st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
@@ -14,10 +15,16 @@ st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
 # --- 2. Konfigurasjon ---
 DB_FILE = "ta_nyhetsbot.db"
 
+# Henter API-nøkler fra Secrets
 try:
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except:
-    OPENAI_API_KEY = "" 
+    OPENAI_API_KEY = ""
+
+try:
+    SLACK_WEBHOOK_URL = st.secrets["SLACK_WEBHOOK_URL"]
+except:
+    SLACK_WEBHOOK_URL = ""
 
 client = None
 if "sk-" in OPENAI_API_KEY:
@@ -40,7 +47,7 @@ DEFAULT_KEYWORDS = [
     "E18", "E134", "Riksvei 36", "Fylkesvei", "Geiteryggen",
     "Breviksbrua", "Grenlandsbrua", "Yara", "Herøya", "Hydro", 
     "Sykehuset Telemark", "Universitetet i Sørøst-Norge", "Skagerak Energi",
-    "Odd", "Urædd", "Pors", "Siljan", 
+    "Odd", "Urædd", "Pors", "Siljan"
 ]
 
 # --- 3. Tids-fikser (UTC + 1 time) ---
@@ -71,6 +78,24 @@ def article_exists(link):
     except:
         return False
 
+# --- NY: SLACK VARSLING ---
+def send_slack_notification(title, link, score, reason, source):
+    if not SLACK_WEBHOOK_URL:
+        return # Ingen URL satt opp, gjør ingenting
+    
+    # Send kun hvis score er høy (Rød sone)
+    if score < 85:
+        return
+
+    payload = {
+        "text": f"🚨 *BREAKING / VIKTIG ({score} poeng)*\n*<{link}|{title}>*\n🤖 {reason}\n📰 Kilde: {source}"
+    }
+    
+    try:
+        requests.post(SLACK_WEBHOOK_URL, json=payload)
+    except Exception as e:
+        print(f"Klarte ikke sende til Slack: {e}")
+
 def save_article(entry, source, keyword, score, reason):
     try:
         title = clean_html(entry.title)
@@ -84,6 +109,10 @@ def save_article(entry, source, keyword, score, reason):
             c.execute("INSERT INTO articles VALUES (?,?,?,?,?,?,?,?,?,?,?)", 
                      (link, title, link, summary, source, published, found_at, keyword, score, reason, 'Ny'))
             conn.commit()
+        
+        # --- NY: PRØVER Å SENDE TIL SLACK ---
+        send_slack_notification(title, link, score, reason, source)
+        
         return True
     except Exception as e:
         st.error(f"Lagringsfeil: {e}")
@@ -193,7 +222,6 @@ def main():
         if st.button("🔎 Søk manuelt", type="primary"):
             hits = fetch_and_filter_news(active_keywords)
             if hits > 0: 
-                # Lagrer info
                 st.session_state.last_hits_count = hits
                 st.session_state.last_hits_time = get_norway_time().strftime("%H:%M")
                 st.rerun()
@@ -217,11 +245,9 @@ def main():
 
     # --- VISNING AV NYHETER ---
     
-    # 1. VARSEL OM NYE SAKER
     if 'last_hits_count' in st.session_state and st.session_state.last_hits_count > 0:
         st.success(f"🚨 Siste søk (kl {st.session_state.last_hits_time}) fant **{st.session_state.last_hits_count}** nye saker!")
 
-    # 2. HENT DATA
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
@@ -258,18 +284,13 @@ def main():
     else:
         st.info("Ingen saker funnet ennå.")
 
-    # --- AUTOPILOT PAUSE (Med riktig tidsvisning i menyen) ---
+    # --- AUTOPILOT PAUSE ---
     if auto_run:
-        # Beregner neste kjøring (Server-tid)
         next_run_server = st.session_state.last_check + timedelta(minutes=10)
-        
-        # Konverterer til Norsk tid for visning (+1 time)
         next_run_display = next_run_server + timedelta(hours=1)
-        
         st.sidebar.info(f"💤 Neste sjekk: {next_run_display.strftime('%H:%M')}")
         time.sleep(30)
         st.rerun()
 
 if __name__ == "__main__":
     main()
-
