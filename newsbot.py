@@ -188,34 +188,41 @@ def main():
         active_keywords = [k.strip() for k in user_input.split(",") if k.strip()]
         st.divider()
         
-        # Vi lagrer bare statusen her, men kjører ikke loopen her inne!
         auto_run = st.toggle("🔄 Autopilot")
         
         if st.button("🔎 Søk manuelt", type="primary"):
             hits = fetch_and_filter_news(active_keywords)
             if hits > 0: 
-                st.success(f"Fant {hits} nye!")
-                time.sleep(1)
+                # Lagrer info til manuell søk også
+                st.session_state.last_hits_count = hits
+                st.session_state.last_hits_time = get_norway_time().strftime("%H:%M")
                 st.rerun()
             else: 
                 st.info("Ingen nye treff.")
 
-    # --- LOGIKK: Skal vi hente nyheter? (Flyttet ut av visningen) ---
-    # Sjekker om autopilot er på, OG om det er tid for ny sjekk
-    # (Dette gjør at vi henter data FØR vi tegner tabellen hvis det trengs)
+    # --- AUTOPILOT LOGIKK (Kjøres FØR visning) ---
     if auto_run:
-        # Vi bruker en session_state for å huske når vi sist sjekket
         if 'last_check' not in st.session_state:
             st.session_state.last_check = datetime.min
         
-        # Hvis det er mer enn 10 min siden sist sjekk
+        # Hvis det er tid for ny sjekk (hvert 10. minutt)
         if datetime.now() - st.session_state.last_check > timedelta(minutes=10):
-            fetch_and_filter_news(active_keywords)
+            hits = fetch_and_filter_news(active_keywords)
             st.session_state.last_check = datetime.now()
-            # Rerun for å vise de nye treffene med en gang
+            
+            # Lagre resultatene i "minnet" til appen
+            st.session_state.last_hits_count = hits
+            st.session_state.last_hits_time = get_norway_time().strftime("%H:%M")
+            
             st.rerun()
 
-    # --- VISNING: Tegn tabellen ---
+    # --- VISNING AV NYHETER ---
+    
+    # 1. VIS VARSEL OM NYE SAKER (HVIS DET FINNES)
+    if 'last_hits_count' in st.session_state and st.session_state.last_hits_count > 0:
+        st.success(f"🚨 Siste søk (kl {st.session_state.last_hits_time}) fant **{st.session_state.last_hits_count}** nye saker!")
+
+    # 2. HENT DATA FRA DATABASE
     try:
         with sqlite3.connect(DB_FILE) as conn:
             df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
@@ -252,14 +259,10 @@ def main():
     else:
         st.info("Ingen saker funnet ennå.")
 
-    # --- AUTOPILOT PAUSE (Helt til slutt) ---
-    # Nå som alt er tegnet, kan vi la scriptet vente hvis autopilot er på
+    # --- AUTOPILOT PAUSE (Etter visning) ---
     if auto_run:
         next_run = st.session_state.last_check + timedelta(minutes=10)
-        # Vi viser en liten beskjed i sidebaren
         st.sidebar.info(f"💤 Neste sjekk: {next_run.strftime('%H:%M')}")
-        
-        # Sjekk hvert 30. sekund om vi skal kjøre igjen (for å holde siden 'live')
         time.sleep(30)
         st.rerun()
 
