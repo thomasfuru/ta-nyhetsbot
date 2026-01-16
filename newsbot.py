@@ -37,10 +37,10 @@ DEFAULT_KEYWORDS = [
     "Notodden", "Tinn", "Vinje", "Nome", "Seljord", "Kviteseid",
     "Nissedal", "Fyresdal", "Tokke", "Hjartdal", "Bø", "Sauherad",
     "Grenland", "Vest-Telemark", "Øst-Telemark", "Midt-Telemark",
-    "E18", "E134", "Riksvei 36", "Fylkesvei", "Gullknapp", "Geiteryggen",
-    "Breviksbrua", "Grenlandsbrua", "Yara", "Herøya", "Hydro", "Equinor", 
+    "E18", "E134", "Riksvei 36", "Fylkesvei", "Geiteryggen",
+    "Breviksbrua", "Grenlandsbrua", "Yara", "Herøya", "Hydro", 
     "Sykehuset Telemark", "Universitetet i Sørøst-Norge", "Skagerak Energi",
-    "Odd", "Urædd", "Pors", "Notodden FK"
+    "Odd", "Urædd", "Pors", "Siljan", 
 ]
 
 # --- 3. Tids-fikser (UTC + 1 time) ---
@@ -272,3 +272,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
