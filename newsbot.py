@@ -161,4 +161,112 @@ def fetch_and_filter_news(keywords):
         progress.progress((i+1)/len(RSS_SOURCES))
     
     status_box.empty() 
-    progress.empty
+    progress.empty()   
+    return new_hits
+
+# --- 5. Hovedprogrammet ---
+def main():
+    st.title("🗞️ Nyhetsstrøm for Telemark")
+    init_db()
+
+    # --- SIDEBAR ---
+    with st.sidebar:
+        st.header("TA Monitor")
+        
+        if st.button("🗑️ Nullstill database"):
+            try:
+                os.remove(DB_FILE)
+                st.success("Slettet! Laster på nytt...")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.warning(f"Kunne ikke slette: {e}")
+
+        st.subheader("📍 Geofilter")
+        user_input = st.text_area("Søkeord", value=", ".join(DEFAULT_KEYWORDS), height=150)
+        active_keywords = [k.strip() for k in user_input.split(",") if k.strip()]
+        st.divider()
+        
+        auto_run = st.toggle("🔄 Autopilot")
+        
+        if auto_run:
+            hits = fetch_and_filter_news(active_keywords)
+            if hits: st.toast(f"Fant {hits} nye saker!", icon="🔥")
+            
+            next_run = datetime.now() + timedelta(minutes=10)
+            t_str = next_run.strftime("%H:%M")
+            st.info(f"✅ Ferdig. Sover til {t_str}")
+            time.sleep(600) 
+            st.rerun()
+            
+        elif st.button("🔎 Søk manuelt", type="primary"):
+            hits = fetch_and_filter_news(active_keywords)
+            if hits > 0: 
+                st.success(f"Fant {hits} nye!")
+                time.sleep(1)
+                st.rerun()
+            else: 
+                st.info("Ingen nye treff.")
+
+        if st.button("🛠️ Test"):
+            try:
+                class MockEntry: pass
+                dummy = MockEntry()
+                dummy.link = f"http://test{int(time.time())}.no"
+                dummy.title = "Test-sak fra Skien"
+                dummy.summary = "Dette er en test."
+                dummy.published = "Nå"
+                if save_article(dummy, "TestKilde", "Skien", 95, "Test av høy score"):
+                    st.success("Test lagret!")
+                    time.sleep(1)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Test feilet: {e}")
+
+    # --- HOVEDVISNING (Kronologisk liste) ---
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            # Henter ALLE saker sortert på TID (nyeste funn øverst)
+            df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
+    except Exception as e:
+        st.error(f"Databasefeil: {e}")
+        df = pd.DataFrame()
+
+    if not df.empty:
+        today = datetime.now().strftime("%Y-%m-%d")
+        todays_news = df[df['found_at'].str.contains(today)]
+        
+        # Toppstatistikk
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Saker i dag", len(todays_news))
+        c2.metric("Gjennomsnittsscore", int(df['ai_score'].mean()) if not df.empty else 0)
+        c3.metric("Siste oppdatering", datetime.now().strftime("%H:%M"))
+        st.divider()
+
+        # TEGNER KORTENE (Uten faner, rett nedover)
+        cols_per_row = 3
+        for i in range(0, len(df), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j in range(cols_per_row):
+                if i + j < len(df):
+                    row = df.iloc[i + j]
+                    score = row['ai_score'] if row['ai_score'] else 0
+                    
+                    # Fargekoder basert på score
+                    header_color = "red" if score >= 80 else "orange" if score >= 50 else "grey"
+                    
+                    with cols[j]:
+                        with st.container(border=True):
+                            # Tittel og Score
+                            st.markdown(f"**Score: :{header_color}[{score}]**")
+                            st.markdown(f"#### [{row['title']}]({row['link']})")
+                            
+                            # Info
+                            st.info(f"🤖 {row['ai_reason']}")
+                            st.caption(f"📍 {row['matched_keyword']} | 📰 {row['source']}")
+                            st.caption(f"🕒 Funnet: {row['found_at']}")
+    else:
+        st.info("Ingen saker funnet ennå. Trykk på '🔎 Søk manuelt' for å starte.")
+
+if __name__ == "__main__":
+    main()
