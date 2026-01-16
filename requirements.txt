@@ -1,4 +1,6 @@
 streamlit
 feedparser
 pandas
+
 openai
+requests
