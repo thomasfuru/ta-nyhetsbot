@@ -14,6 +14,7 @@ st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
 # --- 2. Konfigurasjon ---
 DB_FILE = "ta_nyhetsbot.db"
 
+# Prøver å hente API-nøkkel
 try:
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 except:
@@ -43,7 +44,20 @@ DEFAULT_KEYWORDS = [
     "Odd", "Urædd", "Pors", "Notodden FK"
 ]
 
-# --- 3. Hjelpefunksjoner ---
+# --- 3. Tids-fikser (Norsk Tid) ---
+# Denne funksjonen prøver å bruke ZoneInfo for korrekt norsk tid.
+# Hvis det feiler (pga manglende filer), legger den bare på 1 time manuelt.
+def get_norway_time():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/Oslo"))
+    except ImportError:
+        # Fallback: Legg til 1 time manuelt (Vintertid)
+        return datetime.now() + timedelta(hours=1)
+    except Exception:
+        return datetime.now()
+
+# --- 4. Hjelpefunksjoner ---
 def clean_html(raw_html):
     if not isinstance(raw_html, str): return ""
     cleanr = re.compile('<.*?>')
@@ -73,7 +87,9 @@ def save_article(entry, source, keyword, score, reason):
         summary = clean_html(getattr(entry, 'summary', ''))
         link = entry.link
         published = getattr(entry, 'published', 'Ukjent')
-        found_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # BRUKER NORSK TID HER
+        found_at = get_norway_time().strftime("%Y-%m-%d %H:%M:%S")
 
         with sqlite3.connect(DB_FILE) as conn:
             c = conn.cursor()
@@ -91,7 +107,6 @@ def analyze_relevance_with_ai(title, summary, keyword):
     clean_title = clean_html(title)
     clean_summary = clean_html(summary)
     
-    # AGGRESSIV INSTRUKS (Høy score)
     prompt = f"""
     Du er nyhetssjef for Telemarksavisa.
     Søkeord funnet: '{keyword}'.
@@ -193,7 +208,8 @@ def main():
             hits = fetch_and_filter_news(active_keywords)
             if hits: st.toast(f"Fant {hits} nye saker!", icon="🔥")
             
-            next_run = datetime.now() + timedelta(minutes=10)
+            # BRUKER NORSK TID HER FOR NESTE KJØRING
+            next_run = get_norway_time() + timedelta(minutes=10)
             t_str = next_run.strftime("%H:%M")
             st.info(f"✅ Ferdig. Sover til {t_str}")
             time.sleep(600) 
@@ -223,27 +239,26 @@ def main():
             except Exception as e:
                 st.error(f"Test feilet: {e}")
 
-    # --- HOVEDVISNING (Kronologisk liste) ---
+    # --- HOVEDVISNING ---
     try:
         with sqlite3.connect(DB_FILE) as conn:
-            # Henter ALLE saker sortert på TID (nyeste funn øverst)
             df = pd.read_sql_query("SELECT * FROM articles ORDER BY found_at DESC", conn)
     except Exception as e:
         st.error(f"Databasefeil: {e}")
         df = pd.DataFrame()
 
     if not df.empty:
-        today = datetime.now().strftime("%Y-%m-%d")
+        # BRUKER NORSK TID HER FOR FILTRERING AV DAGENS SAKER
+        today = get_norway_time().strftime("%Y-%m-%d")
         todays_news = df[df['found_at'].str.contains(today)]
         
-        # Toppstatistikk
         c1, c2, c3 = st.columns(3)
         c1.metric("Saker i dag", len(todays_news))
-        c2.metric("Gjennomsnittsscore", int(df['ai_score'].mean()) if not df.empty else 0)
-        c3.metric("Siste oppdatering", datetime.now().strftime("%H:%M"))
+        c2.metric("Snitt-score", int(df['ai_score'].mean()) if not df.empty else 0)
+        # BRUKER NORSK TID HER FOR SISTE SJEKK
+        c3.metric("Siste oppdatering", get_norway_time().strftime("%H:%M"))
         st.divider()
 
-        # TEGNER KORTENE (Uten faner, rett nedover)
         cols_per_row = 3
         for i in range(0, len(df), cols_per_row):
             cols = st.columns(cols_per_row)
@@ -251,19 +266,16 @@ def main():
                 if i + j < len(df):
                     row = df.iloc[i + j]
                     score = row['ai_score'] if row['ai_score'] else 0
-                    
-                    # Fargekoder basert på score
                     header_color = "red" if score >= 80 else "orange" if score >= 50 else "grey"
                     
                     with cols[j]:
                         with st.container(border=True):
-                            # Tittel og Score
                             st.markdown(f"**Score: :{header_color}[{score}]**")
                             st.markdown(f"#### [{row['title']}]({row['link']})")
-                            
-                            # Info
                             st.info(f"🤖 {row['ai_reason']}")
                             st.caption(f"📍 {row['matched_keyword']} | 📰 {row['source']}")
+                            
+                            # Viser tidsstempel (som nå er lagret i norsk tid)
                             st.caption(f"🕒 Funnet: {row['found_at']}")
     else:
         st.info("Ingen saker funnet ennå. Trykk på '🔎 Søk manuelt' for å starte.")
