@@ -47,7 +47,7 @@ DEFAULT_KEYWORDS = [
     "E18", "E134", "Riksvei 36", "Fylkesvei", "Geiteryggen",
     "Breviksbrua", "Grenlandsbrua", "Yara", "Herøya", "Hydro", 
     "Sykehuset Telemark", "Universitetet i Sørøst-Norge", "Skagerak Energi",
-    "Odd", "Urædd", "Pors", "Siljan"
+    "Odd", "Urædd", "Pors", "Siljan", "Drangedal", "Haukeli", "Sør-Øst", 
 ]
 
 # --- 3. Tids-fikser (UTC + 1 time) ---
@@ -318,3 +318,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
