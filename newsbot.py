@@ -8,7 +8,7 @@ from openai import OpenAI
 import os
 import re
 import requests
-from bs4 import BeautifulSoup  # <--- NY: For å lese Brreg
+from bs4 import BeautifulSoup
 
 # --- 1. Sette opp siden ---
 st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
@@ -86,7 +86,6 @@ def send_slack_notification(title, link, score, reason, source):
     if not SLACK_WEBHOOK_URL:
         return 
     
-    # Terskel: 70 poeng
     if score < 70:
         return
 
@@ -121,6 +120,7 @@ def save_article(entry, source, keyword, score, reason):
         st.error(f"Lagringsfeil: {e}")
         return False
 
+# --- AI ANALYSE (Oppdatert: Fikset score-bug) ---
 def analyze_relevance_with_ai(title, summary, keyword):
     if not client: return 50, "Mangler nøkkel"
     
@@ -152,9 +152,15 @@ def analyze_relevance_with_ai(title, summary, keyword):
         content = response.choices[0].message.content
         
         score = 0
+        # --- NY LOGIKK: Finn kun det første tallet ---
         if "Score:" in content:
             score_part = content.split("Score:")[1].split("\n")[0]
-            score = int(''.join(filter(str.isdigit, score_part)))
+            # Bruker regex for å finne første gruppe med tall
+            match = re.search(r'\d+', score_part)
+            if match:
+                score = int(match.group())
+                # Sikring: Score kan ikke være over 100
+                if score > 100: score = 100
         
         reason = "Relevant"
         if "Begrunnelse:" in content:
@@ -164,33 +170,26 @@ def analyze_relevance_with_ai(title, summary, keyword):
     except Exception:
         return 50, "AI feilet"
 
-# --- NY: BRØNNØYSUND-SJEKK ---
+# --- BRØNNØYSUND-SJEKK ---
 def check_brreg():
     hits = 0
-    # 1. Generer dagens dato (DD.MM.YYYY)
     today_str = datetime.now().strftime("%d.%m.%Y")
     
-    # 2. Bygg URL (Fylke 40=Telemark, Niva1 51=Konkurs)
     url = f"https://w2.brreg.no/kunngjoring/kombisok.jsp?datoFra={today_str}&datoTil={today_str}&id_region=400&id_fylke=40&id_kommune=-+-+-&id_niva1=51&id_niva2=-+-+-&id_bransje1=0"
     
     try:
-        # 3. Hent nettsiden
         headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers)
-        r.encoding = 'ISO-8859-1' # Brreg bruker ofte gammel koding
+        r.encoding = 'ISO-8859-1' 
         
-        # 4. Les HTML
         soup = BeautifulSoup(r.text, 'html.parser')
         
-        # Finn tabellen med resultater. Vi ser etter lenker som inneholder 'hent_enhet.jsp'
         for link in soup.find_all('a', href=True):
             if "hent_enhet.jsp" in link['href']:
                 company_name = link.text.strip()
                 full_link = f"https://w2.brreg.no/kunngjoring/{link['href']}"
                 
-                # Sjekk om vi har den fra før
                 if not article_exists(full_link):
-                    # Lager et falskt "RSS-entry" objekt
                     class BrregEntry: pass
                     entry = BrregEntry()
                     entry.title = f"KONKURS: {company_name}"
@@ -198,10 +197,8 @@ def check_brreg():
                     entry.link = full_link
                     entry.published = today_str
                     
-                    # Analyser med AI (Tvinger høy relevans)
                     score, reason = analyze_relevance_with_ai(entry.title, entry.summary, "Konkurs Telemark")
                     
-                    # Lagre
                     if save_article(entry, "Brønnøysund", "Konkurs", score, reason):
                         hits += 1
     except Exception as e:
@@ -214,12 +211,12 @@ def fetch_and_filter_news(keywords):
     status_box = st.sidebar.empty()
     progress = st.sidebar.progress(0)
     
-    # --- 1. SJEKK BRØNNØYSUND FØRST ---
+    # 1. BRØNNØYSUND
     status_box.text("Sjekker Brønnøysundregistrene...")
     brreg_hits = check_brreg()
     new_hits += brreg_hits
 
-    # --- 2. SJEKK RSS ---
+    # 2. RSS
     USER_AGENT = "Mozilla/5.0"
     for i, url in enumerate(RSS_SOURCES):
         status_box.text(f"Leser {url}...")
@@ -254,7 +251,6 @@ def main():
     st.title("🗞️ Nyhetsstrøm for Telemark")
     init_db()
 
-    # --- SIDEBAR KONFIGURASJON ---
     with st.sidebar:
         st.header("TA Monitor")
         
@@ -298,7 +294,7 @@ def main():
             except Exception as e:
                 st.error(f"Feil: {e}")
 
-    # --- AUTOPILOT LOGIKK ---
+    # Autopilot
     if auto_run:
         if 'last_check' not in st.session_state:
             st.session_state.last_check = datetime.min
@@ -310,7 +306,7 @@ def main():
             st.session_state.last_hits_time = get_norway_time().strftime("%H:%M")
             st.rerun()
 
-    # --- VISNING AV NYHETER ---
+    # Visning
     if 'last_hits_count' in st.session_state and st.session_state.last_hits_count > 0:
         st.success(f"🚨 Siste søk (kl {st.session_state.last_hits_time}) fant **{st.session_state.last_hits_count}** nye saker!")
 
@@ -358,4 +354,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
