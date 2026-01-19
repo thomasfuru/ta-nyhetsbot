@@ -37,7 +37,9 @@ RSS_SOURCES = [
     "https://www.dagbladet.no/rss/nyheter",
     "https://www.e24.no/rss",
     "https://www.nrk.no/vestfoldogtelemark/siste.rss",
-    "https://news.google.com/rss/search?q=Telemark+OR+Skien+OR+Porsgrunn+when:1d&hl=no&gl=NO&ceid=NO:no"
+    "https://news.google.com/rss/search?q=Telemark+OR+Skien+OR+Porsgrunn+when:1d&hl=no&gl=NO&ceid=NO:no",
+    "https://news.google.com/rss/search?q=site:finansavisen.no&hl=no&gl=NO&ceid=NO:no",
+    "https://news.google.com/rss/search?q=site:dn.no&hl=no&gl=NO&ceid=NO:no"
 ]
 
 DEFAULT_KEYWORDS = [
@@ -356,3 +358,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
