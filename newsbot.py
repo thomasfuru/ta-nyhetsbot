@@ -139,9 +139,9 @@ def analyze_relevance_with_ai(title, summary, keyword):
     0-39: Irrelevant/Støy.
     40-69: LAV.
     70-89: HØY (Handler om Telemark/lokale forhold).
-    90-100: BREAKING/KRITISK (Konkursåpning, Tvangsavvikling, blålys, store kriser).
+    90-100: BREAKING/KRITISK (Konkurs, Tvang, blålys, store kriser).
     
-    MERK: Hvis dette er en KONKURS eller TVANGSAVVIKLING i Telemark -> Gi minst 90 poeng.
+    MERK: Hvis dette gjelder Konkurs, Tvangsavvikling, Tvangsoppløsning eller Gjeldsforhandling i Telemark -> Gi minst 90 poeng.
     
     Begrunnelse: Maks 8 ord.
     Format: Score: [tall] Begrunnelse: [tekst]
@@ -167,28 +167,29 @@ def analyze_relevance_with_ai(title, summary, keyword):
     except Exception:
         return 50, "AI feilet"
 
-# --- BRØNNØYSUND-SJEKK (NY VERSJON: Tabell-leser) ---
+# --- BRØNNØYSUND-SJEKK ---
 def check_brreg():
     hits = 0
     today = datetime.now()
-    # Øker til 7 dager for å være sikker på å fange opp alt
     date_to = today.strftime("%d.%m.%Y")
     date_from = (today - timedelta(days=7)).strftime("%d.%m.%Y")
     
     search_types = [
         {"id": "51", "name": "Konkursåpning"},
-        {"id": "52", "name": "Tvangsavvikling"}
+        {"id": "52", "name": "Tvangsavvikling"},
+        {"id": "53", "name": "Tvangsoppløsning"},
+        {"id": "56", "name": "Gjeldsforhandling"},
+        {"id": "55", "name": "Oppbud"}
     ]
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml"
     }
 
-    # Debug-lenke i sidebar
     debug_url = f"https://w2.brreg.no/kunngjoring/kombisok.jsp?datoFra={date_from}&datoTil={date_to}&id_region=400&id_fylke=40&id_kommune=-+-+-&id_niva1=51&id_niva2=-+-+-&id_bransje1=0"
     st.sidebar.markdown("### 🕵️‍♂️ Debug Brreg")
-    st.sidebar.markdown(f"[Åpne Brreg-søk ({date_from}-{date_to})]({debug_url})")
+    st.sidebar.markdown(f"[Åpne manuelt søk]({debug_url})")
 
     for stype in search_types:
         url = f"https://w2.brreg.no/kunngjoring/kombisok.jsp?datoFra={date_from}&datoTil={date_to}&id_region=400&id_fylke=40&id_kommune=-+-+-&id_niva1={stype['id']}&id_niva2=-+-+-&id_bransje1=0"
@@ -198,36 +199,30 @@ def check_brreg():
             r.encoding = 'ISO-8859-1' 
             soup = BeautifulSoup(r.text, 'html.parser')
             
-            # Går gjennom alle tabellrader (tr) i stedet for bare løse lenker
-            rows = soup.find_all('tr')
-            for row in rows:
-                cols = row.find_all('td')
-                # En gyldig rad har vanligvis firmanavn (med lenke) i første kolonne
-                if len(cols) >= 3:
-                    link_tag = cols[0].find('a')
-                    if link_tag:
-                        company_name = link_tag.text.strip()
-                        href = link_tag['href']
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                if "hent_kunngjoring.jsp" in href or "hent_enhet.jsp" in href:
+                    company_name = link.text.strip()
+                    if len(company_name) < 2: continue
+                    
+                    full_link = f"https://w2.brreg.no/kunngjoring/{href}"
+                    
+                    if not article_exists(full_link):
+                        class BrregEntry: pass
+                        entry = BrregEntry()
+                        entry.title = f"{stype['name'].upper()}: {company_name}"
+                        entry.summary = f"Brønnøysundmelding for Telemark. Kategori: {stype['name']}."
+                        entry.link = full_link
+                        entry.published = date_to
                         
-                        # Sjekker at det er en relevant lenke og at navnet ikke er tomt
-                        if "hent" in href and len(company_name) > 2:
-                            full_link = f"https://w2.brreg.no/kunngjoring/{href}"
-                            
-                            if not article_exists(full_link):
-                                class BrregEntry: pass
-                                entry = BrregEntry()
-                                entry.title = f"{stype['name'].upper()}: {company_name}"
-                                entry.summary = f"Ny kunngjøring fra Brønnøysundregistrene i Telemark. Gjelder {stype['name']}."
-                                entry.link = full_link
-                                entry.published = date_to
-                                
-                                score, reason = analyze_relevance_with_ai(entry.title, entry.summary, stype['name'])
-                                
-                                if save_article(entry, "Brønnøysund", stype['name'], score, reason):
-                                    hits += 1
+                        score, reason = analyze_relevance_with_ai(entry.title, entry.summary, stype['name'])
+                        
+                        if save_article(entry, "Brønnøysund", stype['name'], score, reason):
+                            hits += 1
                                     
         except Exception as e:
             print(f"Brreg-feil ({stype['name']}): {e}")
+            time.sleep(1) 
         
     return hits
 
@@ -255,7 +250,15 @@ def fetch_and_filter_news(keywords):
                     continue 
 
                 raw_text = (entry.title + " " + getattr(entry, 'summary', '')).lower()
-                hit = next((k for k in keywords if k.lower() in raw_text), None)
+                
+                # --- NY SØKEMETODE: Regex med ordgrenser (\b) ---
+                hit = None
+                for k in keywords:
+                    # mønsteret \bORD\b betyr at det må være mellomrom/tegn rundt ordet
+                    pattern = r"\b" + re.escape(k.lower()) + r"\b"
+                    if re.search(pattern, raw_text):
+                        hit = k
+                        break
                 
                 if hit:
                     if not article_exists(entry.link):
