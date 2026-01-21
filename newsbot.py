@@ -139,9 +139,9 @@ def analyze_relevance_with_ai(title, summary, keyword):
     0-39: Irrelevant/Støy.
     40-69: LAV.
     70-89: HØY (Handler om Telemark/lokale forhold).
-    90-100: BREAKING/KRITISK (Konkursåpning, blålys, store kriser).
+    90-100: BREAKING/KRITISK (Konkursåpning, Tvangsavvikling, blålys, store kriser).
     
-    MERK: Hvis dette er en KONKURS i Telemark -> Gi minst 85 poeng.
+    MERK: Hvis dette er en KONKURS eller TVANGSAVVIKLING i Telemark -> Gi minst 90 poeng.
     
     Begrunnelse: Maks 8 ord.
     Format: Score: [tall] Begrunnelse: [tekst]
@@ -167,48 +167,67 @@ def analyze_relevance_with_ai(title, summary, keyword):
     except Exception:
         return 50, "AI feilet"
 
-# --- BRØNNØYSUND-SJEKK (Oppdatert: Sjekker 3 dager + bredere lenkefangst) ---
+# --- BRØNNØYSUND-SJEKK (NY VERSJON: Tabell-leser) ---
 def check_brreg():
     hits = 0
-    # Sjekker dato: I dag og 3 dager bakover
     today = datetime.now()
+    # Øker til 7 dager for å være sikker på å fange opp alt
     date_to = today.strftime("%d.%m.%Y")
-    date_from = (today - timedelta(days=3)).strftime("%d.%m.%Y")
+    date_from = (today - timedelta(days=7)).strftime("%d.%m.%Y")
     
-    # URL (Telemark=40, Konkurs=51)
-    url = f"https://w2.brreg.no/kunngjoring/kombisok.jsp?datoFra={date_from}&datoTil={date_to}&id_region=400&id_fylke=40&id_kommune=-+-+-&id_niva1=51&id_niva2=-+-+-&id_bransje1=0"
+    search_types = [
+        {"id": "51", "name": "Konkursåpning"},
+        {"id": "52", "name": "Tvangsavvikling"}
+    ]
     
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers)
-        r.encoding = 'ISO-8859-1' 
-        
-        soup = BeautifulSoup(r.text, 'html.parser')
-        
-        # Leter etter lenker. Nå ser vi etter både 'hent_kunngjoring' og 'hent_enhet'
-        for link in soup.find_all('a', href=True):
-            href = link['href']
-            if "hent_kunngjoring.jsp" in href or "hent_enhet.jsp" in href:
-                company_name = link.text.strip()
-                # Filtrerer ut irrelevante lenker (noen ganger er 'Neste side' osv lenket feil)
-                if len(company_name) < 2: continue
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+    }
 
-                full_link = f"https://w2.brreg.no/kunngjoring/{href}"
-                
-                if not article_exists(full_link):
-                    class BrregEntry: pass
-                    entry = BrregEntry()
-                    entry.title = f"KONKURS: {company_name}"
-                    entry.summary = "Ny kunngjøring registrert i Brønnøysundregistrene (Telemark)."
-                    entry.link = full_link
-                    entry.published = date_to
-                    
-                    score, reason = analyze_relevance_with_ai(entry.title, entry.summary, "Konkurs Telemark")
-                    
-                    if save_article(entry, "Brønnøysund", "Konkurs", score, reason):
-                        hits += 1
-    except Exception as e:
-        print(f"Brreg-feil: {e}")
+    # Debug-lenke i sidebar
+    debug_url = f"https://w2.brreg.no/kunngjoring/kombisok.jsp?datoFra={date_from}&datoTil={date_to}&id_region=400&id_fylke=40&id_kommune=-+-+-&id_niva1=51&id_niva2=-+-+-&id_bransje1=0"
+    st.sidebar.markdown("### 🕵️‍♂️ Debug Brreg")
+    st.sidebar.markdown(f"[Åpne Brreg-søk ({date_from}-{date_to})]({debug_url})")
+
+    for stype in search_types:
+        url = f"https://w2.brreg.no/kunngjoring/kombisok.jsp?datoFra={date_from}&datoTil={date_to}&id_region=400&id_fylke=40&id_kommune=-+-+-&id_niva1={stype['id']}&id_niva2=-+-+-&id_bransje1=0"
+        
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            r.encoding = 'ISO-8859-1' 
+            soup = BeautifulSoup(r.text, 'html.parser')
+            
+            # Går gjennom alle tabellrader (tr) i stedet for bare løse lenker
+            rows = soup.find_all('tr')
+            for row in rows:
+                cols = row.find_all('td')
+                # En gyldig rad har vanligvis firmanavn (med lenke) i første kolonne
+                if len(cols) >= 3:
+                    link_tag = cols[0].find('a')
+                    if link_tag:
+                        company_name = link_tag.text.strip()
+                        href = link_tag['href']
+                        
+                        # Sjekker at det er en relevant lenke og at navnet ikke er tomt
+                        if "hent" in href and len(company_name) > 2:
+                            full_link = f"https://w2.brreg.no/kunngjoring/{href}"
+                            
+                            if not article_exists(full_link):
+                                class BrregEntry: pass
+                                entry = BrregEntry()
+                                entry.title = f"{stype['name'].upper()}: {company_name}"
+                                entry.summary = f"Ny kunngjøring fra Brønnøysundregistrene i Telemark. Gjelder {stype['name']}."
+                                entry.link = full_link
+                                entry.published = date_to
+                                
+                                score, reason = analyze_relevance_with_ai(entry.title, entry.summary, stype['name'])
+                                
+                                if save_article(entry, "Brønnøysund", stype['name'], score, reason):
+                                    hits += 1
+                                    
+        except Exception as e:
+            print(f"Brreg-feil ({stype['name']}): {e}")
         
     return hits
 
