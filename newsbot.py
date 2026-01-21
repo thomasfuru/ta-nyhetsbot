@@ -120,7 +120,7 @@ def save_article(entry, source, keyword, score, reason):
         st.error(f"Lagringsfeil: {e}")
         return False
 
-# --- AI ANALYSE (Oppdatert: Fikset score-bug) ---
+# --- AI ANALYSE ---
 def analyze_relevance_with_ai(title, summary, keyword):
     if not client: return 50, "Mangler nøkkel"
     
@@ -152,14 +152,11 @@ def analyze_relevance_with_ai(title, summary, keyword):
         content = response.choices[0].message.content
         
         score = 0
-        # --- NY LOGIKK: Finn kun det første tallet ---
         if "Score:" in content:
             score_part = content.split("Score:")[1].split("\n")[0]
-            # Bruker regex for å finne første gruppe med tall
             match = re.search(r'\d+', score_part)
             if match:
                 score = int(match.group())
-                # Sikring: Score kan ikke være over 100
                 if score > 100: score = 100
         
         reason = "Relevant"
@@ -170,12 +167,16 @@ def analyze_relevance_with_ai(title, summary, keyword):
     except Exception:
         return 50, "AI feilet"
 
-# --- BRØNNØYSUND-SJEKK ---
+# --- BRØNNØYSUND-SJEKK (Oppdatert: Sjekker 3 dager + bredere lenkefangst) ---
 def check_brreg():
     hits = 0
-    today_str = datetime.now().strftime("%d.%m.%Y")
+    # Sjekker dato: I dag og 3 dager bakover
+    today = datetime.now()
+    date_to = today.strftime("%d.%m.%Y")
+    date_from = (today - timedelta(days=3)).strftime("%d.%m.%Y")
     
-    url = f"https://w2.brreg.no/kunngjoring/kombisok.jsp?datoFra={today_str}&datoTil={today_str}&id_region=400&id_fylke=40&id_kommune=-+-+-&id_niva1=51&id_niva2=-+-+-&id_bransje1=0"
+    # URL (Telemark=40, Konkurs=51)
+    url = f"https://w2.brreg.no/kunngjoring/kombisok.jsp?datoFra={date_from}&datoTil={date_to}&id_region=400&id_fylke=40&id_kommune=-+-+-&id_niva1=51&id_niva2=-+-+-&id_bransje1=0"
     
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -184,10 +185,15 @@ def check_brreg():
         
         soup = BeautifulSoup(r.text, 'html.parser')
         
+        # Leter etter lenker. Nå ser vi etter både 'hent_kunngjoring' og 'hent_enhet'
         for link in soup.find_all('a', href=True):
-            if "hent_enhet.jsp" in link['href']:
+            href = link['href']
+            if "hent_kunngjoring.jsp" in href or "hent_enhet.jsp" in href:
                 company_name = link.text.strip()
-                full_link = f"https://w2.brreg.no/kunngjoring/{link['href']}"
+                # Filtrerer ut irrelevante lenker (noen ganger er 'Neste side' osv lenket feil)
+                if len(company_name) < 2: continue
+
+                full_link = f"https://w2.brreg.no/kunngjoring/{href}"
                 
                 if not article_exists(full_link):
                     class BrregEntry: pass
@@ -195,7 +201,7 @@ def check_brreg():
                     entry.title = f"KONKURS: {company_name}"
                     entry.summary = "Ny kunngjøring registrert i Brønnøysundregistrene (Telemark)."
                     entry.link = full_link
-                    entry.published = today_str
+                    entry.published = date_to
                     
                     score, reason = analyze_relevance_with_ai(entry.title, entry.summary, "Konkurs Telemark")
                     
