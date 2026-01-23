@@ -31,15 +31,30 @@ client = None
 if "sk-" in OPENAI_API_KEY:
     client = OpenAI(api_key=OPENAI_API_KEY)
 
+# --- OPPDATERT KILDELISTE ---
 RSS_SOURCES = [
+    # Riksdekkende
     "https://www.nrk.no/toppsaker.rss",
     "https://www.vg.no/rss/feed",
     "https://www.dagbladet.no/rss/nyheter",
     "https://www.e24.no/rss",
-    "https://www.nrk.no/vestfoldogtelemark/siste.rss",
-    "https://news.google.com/rss/search?q=Telemark+OR+Skien+OR+Porsgrunn+when:1d&hl=no&gl=NO&ceid=NO:no",
     "https://news.google.com/rss/search?q=site:finansavisen.no&hl=no&gl=NO&ceid=NO:no",
-    "https://news.google.com/rss/search?q=site:dn.no&hl=no&gl=NO&ceid=NO:no"
+    "https://news.google.com/rss/search?q=site:dn.no&hl=no&gl=NO&ceid=NO:no",
+    "https://news.google.com/rss/search?q=site:nettavisen.no&hl=no&gl=NO&ceid=NO:no", # NY: Nettavisen
+    
+    # Regionale / Lokale (Google News site-søk)
+    "https://www.nrk.no/vestfoldogtelemark/siste.rss",
+    "https://news.google.com/rss/search?q=site:varden.no&hl=no&gl=NO&ceid=NO:no",
+    "https://news.google.com/rss/search?q=site:op.no&hl=no&gl=NO&ceid=NO:no",  
+    "https://news.google.com/rss/search?q=site:pd.no&hl=no&gl=NO&ceid=NO:no",  
+    "https://news.google.com/rss/search?q=site:kv.no&hl=no&gl=NO&ceid=NO:no",  
+    "https://news.google.com/rss/search?q=site:telen.no&hl=no&gl=NO&ceid=NO:no", 
+    "https://news.google.com/rss/search?q=site:tb.no&hl=no&gl=NO&ceid=NO:no",   # NY: Tønsberg Blad
+    "https://news.google.com/rss/search?q=site:sb.no&hl=no&gl=NO&ceid=NO:no",   # NY: Sandefjords Blad
+    "https://news.google.com/rss/search?q=site:drangedalsposten.no&hl=no&gl=NO&ceid=NO:no", # NY: Drangedalsposten
+    
+    # Generelt søk
+    "https://news.google.com/rss/search?q=Telemark+OR+Skien+OR+Porsgrunn+when:1d&hl=no&gl=NO&ceid=NO:no"
 ]
 
 DEFAULT_KEYWORDS = [
@@ -50,7 +65,7 @@ DEFAULT_KEYWORDS = [
     "E18", "E134", "Riksvei 36", "Fylkesvei", "Geiteryggen",
     "Breviksbrua", "Grenlandsbrua", "Yara", "Herøya", "Hydro", 
     "Sykehuset Telemark", "Universitetet i Sørøst-Norge", "Skagerak Energi",
-    "Odd", "Urædd", "Pors", "Siljan"
+    "Odd", "Urædd", "Pors", "Siljan", "Larvik", "Drangedal" # La til Drangedal for sikkerhets skyld
 ]
 
 # --- 3. Tids-fikser (UTC + 1 time) ---
@@ -251,10 +266,9 @@ def fetch_and_filter_news(keywords):
 
                 raw_text = (entry.title + " " + getattr(entry, 'summary', '')).lower()
                 
-                # --- NY SØKEMETODE: Regex med ordgrenser (\b) ---
+                # SØKEMETODE: Regex med ordgrenser
                 hit = None
                 for k in keywords:
-                    # mønsteret \bORD\b betyr at det må være mellomrom/tegn rundt ordet
                     pattern = r"\b" + re.escape(k.lower()) + r"\b"
                     if re.search(pattern, raw_text):
                         hit = k
