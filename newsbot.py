@@ -9,6 +9,7 @@ import os
 import re
 import requests
 from bs4 import BeautifulSoup
+from time import mktime
 
 # --- 1. Sette opp siden ---
 st.set_page_config(page_title="TA Monitor", page_icon="🗞️", layout="wide")
@@ -31,27 +32,27 @@ client = None
 if "sk-" in OPENAI_API_KEY:
     client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- OPPDATERT KILDELISTE ---
+# --- OPPDATERT KILDELISTE (MED when:1d PÅ ALT) ---
 RSS_SOURCES = [
     # Riksdekkende
     "https://www.nrk.no/toppsaker.rss",
     "https://www.vg.no/rss/feed",
     "https://www.dagbladet.no/rss/nyheter",
     "https://www.e24.no/rss",
-    "https://news.google.com/rss/search?q=site:finansavisen.no&hl=no&gl=NO&ceid=NO:no",
-    "https://news.google.com/rss/search?q=site:dn.no&hl=no&gl=NO&ceid=NO:no",
-    "https://news.google.com/rss/search?q=site:nettavisen.no&hl=no&gl=NO&ceid=NO:no", # NY: Nettavisen
+    "https://news.google.com/rss/search?q=site:finansavisen.no+when:1d&hl=no&gl=NO&ceid=NO:no",
+    "https://news.google.com/rss/search?q=site:dn.no+when:1d&hl=no&gl=NO&ceid=NO:no",
+    "https://news.google.com/rss/search?q=site:nettavisen.no+when:1d&hl=no&gl=NO&ceid=NO:no",
     
-    # Regionale / Lokale (Google News site-søk)
+    # Regionale / Lokale (Lagt til when:1d for å unngå arkivsaker)
     "https://www.nrk.no/vestfoldogtelemark/siste.rss",
-    "https://news.google.com/rss/search?q=site:varden.no&hl=no&gl=NO&ceid=NO:no",
-    "https://news.google.com/rss/search?q=site:op.no&hl=no&gl=NO&ceid=NO:no",  
-    "https://news.google.com/rss/search?q=site:pd.no&hl=no&gl=NO&ceid=NO:no",  
-    "https://news.google.com/rss/search?q=site:kv.no&hl=no&gl=NO&ceid=NO:no",  
-    "https://news.google.com/rss/search?q=site:telen.no&hl=no&gl=NO&ceid=NO:no", 
-    "https://news.google.com/rss/search?q=site:tb.no&hl=no&gl=NO&ceid=NO:no",   # NY: Tønsberg Blad
-    "https://news.google.com/rss/search?q=site:sb.no&hl=no&gl=NO&ceid=NO:no",   # NY: Sandefjords Blad
-    "https://news.google.com/rss/search?q=site:drangedalsposten.no&hl=no&gl=NO&ceid=NO:no", # NY: Drangedalsposten
+    "https://news.google.com/rss/search?q=site:varden.no+when:1d&hl=no&gl=NO&ceid=NO:no",
+    "https://news.google.com/rss/search?q=site:op.no+when:1d&hl=no&gl=NO&ceid=NO:no",  
+    "https://news.google.com/rss/search?q=site:pd.no+when:1d&hl=no&gl=NO&ceid=NO:no",  
+    "https://news.google.com/rss/search?q=site:kv.no+when:1d&hl=no&gl=NO&ceid=NO:no",  
+    "https://news.google.com/rss/search?q=site:telen.no+when:1d&hl=no&gl=NO&ceid=NO:no", 
+    "https://news.google.com/rss/search?q=site:tb.no+when:1d&hl=no&gl=NO&ceid=NO:no",   
+    "https://news.google.com/rss/search?q=site:sb.no+when:1d&hl=no&gl=NO&ceid=NO:no",   
+    "https://news.google.com/rss/search?q=site:drangedalsposten.no+when:1d&hl=no&gl=NO&ceid=NO:no",
     
     # Generelt søk
     "https://news.google.com/rss/search?q=Telemark+OR+Skien+OR+Porsgrunn+when:1d&hl=no&gl=NO&ceid=NO:no"
@@ -65,12 +66,26 @@ DEFAULT_KEYWORDS = [
     "E18", "E134", "Riksvei 36", "Fylkesvei", "Geiteryggen",
     "Breviksbrua", "Grenlandsbrua", "Yara", "Herøya", "Hydro", 
     "Sykehuset Telemark", "Universitetet i Sørøst-Norge", "Skagerak Energi",
-    "Odd", "Urædd", "Pors", "Siljan", "Larvik", "Drangedal" # La til Drangedal for sikkerhets skyld
+    "Odd", "Urædd", "Pors", "Siljan", "Larvik", "Drangedal"
 ]
 
-# --- 3. Tids-fikser (UTC + 1 time) ---
+# --- 3. Tids-fikser ---
 def get_norway_time():
     return datetime.now() + timedelta(hours=1)
+
+# --- NY: TIDS-POLITIET (Sjekker om saken er eldre enn 24 timer) ---
+def is_article_fresh(entry):
+    try:
+        # Hvis RSS har publiseringsdato
+        if hasattr(entry, 'published_parsed') and entry.published_parsed:
+            published_dt = datetime.fromtimestamp(mktime(entry.published_parsed))
+            # Legg til 24 timer margin. Er den eldre enn det?
+            cutoff = datetime.now() - timedelta(hours=24)
+            if published_dt < cutoff:
+                return False # For gammel!
+        return True # Ingen dato eller fersk nok
+    except:
+        return True # Lar tvilen komme til gode hvis dato mangler
 
 # --- 4. Hjelpefunksjoner ---
 def clean_html(raw_html):
@@ -135,13 +150,14 @@ def save_article(entry, source, keyword, score, reason):
         st.error(f"Lagringsfeil: {e}")
         return False
 
-# --- AI ANALYSE ---
+# --- AI ANALYSE (STRENGERE) ---
 def analyze_relevance_with_ai(title, summary, keyword):
     if not client: return 50, "Mangler nøkkel"
     
     clean_title = clean_html(title)
     clean_summary = clean_html(summary)
     
+    # OPPDATERT PROMPT: Strengere mot gamle saker og støy
     prompt = f"""
     Du er nyhetsredaktør for Telemarksavisa.
     Søkeord/Tema: '{keyword}'.
@@ -150,13 +166,16 @@ def analyze_relevance_with_ai(title, summary, keyword):
     
     Gi score 0-100 basert på lokal relevans for Telemark.
     
-    SKALA:
-    0-39: Irrelevant/Støy.
+    REGLER FOR POENG:
+    - Er saken fra 2024 eller eldre? -> GI 0 POENG.
+    - Er det en samleside/forside uten en konkret nyhet? -> GI 0 POENG.
+    - Handler det egentlig om Børsen/Oslo og ikke Bø i Telemark? -> GI 0 POENG.
+    
+    SKALA HVIS RELEVANT:
+    0-39: Irrelevant/Støy/Gammelt.
     40-69: LAV.
     70-89: HØY (Handler om Telemark/lokale forhold).
     90-100: BREAKING/KRITISK (Konkurs, Tvang, blålys, store kriser).
-    
-    MERK: Hvis dette gjelder Konkurs, Tvangsavvikling, Tvangsoppløsning eller Gjeldsforhandling i Telemark -> Gi minst 90 poeng.
     
     Begrunnelse: Maks 8 ord.
     Format: Score: [tall] Begrunnelse: [tekst]
@@ -258,6 +277,11 @@ def fetch_and_filter_news(keywords):
         try: 
             feed = feedparser.parse(url, agent=USER_AGENT)
             for entry in feed.entries:
+                
+                # --- SJEKK 1: ER SAKEN FERSK? (Tidspoliti) ---
+                if not is_article_fresh(entry):
+                    continue
+
                 t = entry.title.lower()
                 s = feed.feed.get('title', '').lower()
                 l = entry.link.lower()
@@ -266,7 +290,7 @@ def fetch_and_filter_news(keywords):
 
                 raw_text = (entry.title + " " + getattr(entry, 'summary', '')).lower()
                 
-                # SØKEMETODE: Regex med ordgrenser
+                # --- SJEKK 2: NØKKELORD (Regex) ---
                 hit = None
                 for k in keywords:
                     pattern = r"\b" + re.escape(k.lower()) + r"\b"
